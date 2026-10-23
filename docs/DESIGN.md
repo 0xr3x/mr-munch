@@ -80,8 +80,8 @@ flowchart LR
 **Split of responsibilities**
 
 - **Mr Munch backend = the brain.** Knows restaurants, menus, allergens and the user's profile. Searches, checks dishes, drafts messages. Stateless: all state lives in Atlas, so one service serves every user.
-- **Saint = the hands.** Acts in the real world for one user: email, calendar, browser. Calls our API to decide what to do. Single-tenant by nature.
-- **Atlas = the memory.** Private data per user, plus shared knowledge that grows with every question asked.
+- **Saint = the hands.** Acts in the real world for one user: email, calendar, browser, and the **Google Maps API** (finding places, opening hours, reviews, menu photos). Calls our API to decide what to do. Each user's Saint is a **single-tenant** agent.
+- **Atlas = the memory, and where multitenancy lives.** Private data per user, plus shared knowledge that grows with every question asked. Saints don't need to know about each other: MongoDB keeps each user's profile private and shares restaurant knowledge across all users (see §6).
 
 ---
 
@@ -317,6 +317,7 @@ POST  /menu/scan                   image + user_ids                 → per-pers
 
 | Source | What for | Notes |
 |---|---|---|
+| Google Maps API (via Saint) | Place search, opening hours, `reservable`, rating, reviews, menu photos (up to 10 photos per place, no category filter) | Used live. ToS: only `place_id` may be stored in Atlas |
 | OpenStreetMap (Overpass) | Restaurants, location, `diet:vegan`, `diet:gluten_free`, cuisine | Open, London-wide |
 | FSA Food Hygiene Rating API | Hygiene rating per restaurant | UK open data |
 | Restaurant websites | Menus → `menu_items` | Fetch + Claude extraction, for a demo area (~30–50 places) |
