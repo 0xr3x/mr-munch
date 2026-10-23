@@ -1,6 +1,6 @@
-# SafeTable — Design Sketch
+# Mr Munch — Design Sketch
 
-> Working name. A dining concierge for people with dietary restrictions (vegan, coeliac, shellfish allergy, …) that finds restaurants that work for **everyone in the group**, checks the menus, asks the restaurant what the menu doesn't say, and books the table end to end.
+> A dining concierge for people with dietary restrictions (vegan, coeliac, shellfish allergy, …) that finds restaurants that work for **everyone in the group**, checks the menus, asks the restaurant what the menu doesn't say, and books the table end to end.
 
 Status: draft, Encode 2026 hackathon. Items marked ⚠ need confirming (MongoDB workshop / Saint check-in).
 
@@ -8,7 +8,7 @@ Status: draft, Encode 2026 hackathon. Items marked ⚠ need confirming (MongoDB 
 
 ## 1. Challenges we target
 
-| Challenge | What judges want | How SafeTable answers it |
+| Challenge | What judges want | How Mr Munch answers it |
 |---|---|---|
 | **MongoDB Atlas** (main) | Atlas as the core backend; points per feature used | Search, Vector Search, Hybrid, Automated Embedding, Voyage rerank, Stream Processing (stretch) |
 | **Real World** (Encode) | AI that reads the physical world; honest about uncertainty; privacy | Reads menu photos / specials boards; OpenStreetMap + FSA open data; never claims "safe" for a medical allergy without confirmation; allergy data kept private |
@@ -21,9 +21,9 @@ Status: draft, Encode 2026 hackathon. Items marked ⚠ need confirming (MongoDB 
 Two real users (us), each with real restrictions — e.g. **Alex: coeliac**, **Sam: vegan + shellfish allergy**.
 
 1. Alex tells Saint: *"Dinner Saturday 8pm with Sam, around Shoreditch."*
-2. Saint asks SafeTable for options → ranked restaurants, with how many dishes work for each person.
+2. Saint asks Mr Munch for options → ranked restaurants, with how many dishes work for each person.
 3. Top pick's menu doesn't say whether chips share a fryer with battered food → Saint **drafts an email to the restaurant** → **asks Alex before sending**.
-4. The restaurant replies → Saint posts the answer to SafeTable → stored as a **shared, anonymous fact** about that restaurant.
+4. The restaurant replies → Saint posts the answer to Mr Munch → stored as a **shared, anonymous fact** about that restaurant.
 5. Saint books (website/booking page or email), puts the restrictions in the booking note, sends Sam a calendar invite. **Asks before confirming.**
 6. At the restaurant: Sam photographs the specials board → per-person verdict per dish (safe / avoid / ask staff).
 7. Next day, Sam searches somewhere else nearby → the fryer answer Alex's Saint got is already there, *"confirmed by restaurant, 1 day ago"*. **What one user learns helps everyone.**
@@ -45,7 +45,7 @@ flowchart LR
         SB[Browser / booking sites]
     end
 
-    subgraph App["SafeTable backend — Python / FastAPI (the brain)"]
+    subgraph App["Mr Munch backend — Python / FastAPI (the brain)"]
         API[REST API]
         AG[Concierge agent<br/>Claude + tools]
         MR[Menu reader<br/>Claude vision]
@@ -79,7 +79,7 @@ flowchart LR
 
 **Split of responsibilities**
 
-- **SafeTable backend = the brain.** Knows restaurants, menus, allergens and the user's profile. Searches, checks dishes, drafts messages. Stateless: all state lives in Atlas, so one service serves every user.
+- **Mr Munch backend = the brain.** Knows restaurants, menus, allergens and the user's profile. Searches, checks dishes, drafts messages. Stateless: all state lives in Atlas, so one service serves every user.
 - **Saint = the hands.** Acts in the real world for one user: email, calendar, browser. Calls our API to decide what to do. Single-tenant by nature.
 - **Atlas = the memory.** Private data per user, plus shared knowledge that grows with every question asked.
 
@@ -91,7 +91,7 @@ flowchart LR
 sequenceDiagram
     actor Alex
     participant Saint
-    participant API as SafeTable API
+    participant API as Mr Munch API
     participant Agent as Concierge agent
     participant DB as Atlas
     participant R as Restaurant
@@ -123,7 +123,7 @@ sequenceDiagram
 |---|---|
 | Search, compare, read menus | Sending any email in the user's name |
 | Draft emails and bookings | Confirming a booking |
-| Read restaurant replies, update SafeTable | Paying a deposit / entering card details |
+| Read restaurant replies, update Mr Munch | Paying a deposit / entering card details |
 | Remind the user on the day | Sharing someone's restrictions with a restaurant |
 
 ---
@@ -309,7 +309,7 @@ POST  /reports                     {restaurant_id, restriction, outcome}
 PATCH /reservations/{id}           {status, details}
 POST  /menu/scan                   image + user_ids                 → per-person verdicts
 ```
-⚠ How Saint calls it (terminal/curl, browser, webhook?) — ask at Saint check-in. Plan B: a CLI wrapper `safetable <command>` that Saint runs in its terminal.
+⚠ How Saint calls it (terminal/curl, browser, webhook?) — ask at Saint check-in. Plan B: a CLI wrapper `mrmunch <command>` that Saint runs in its terminal.
 
 ---
 
@@ -360,4 +360,4 @@ POST  /menu/scan                   image + user_ids                 → per-pers
 - ⚠ Saint: how it reaches our API; which accounts it has (email, booking sites).
 - Which booking path for the demo: a real restaurant's site, or a friendly restaurant over email?
 - UI: Streamlit or HTML.
-- Name.
+
