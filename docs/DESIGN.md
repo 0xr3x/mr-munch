@@ -34,7 +34,7 @@ Legend: ✅ built and working · 🟡 partly built · ⬜ planned, not built
 | Voyage `$rerank` | 🟡 code done, off unless `ATLAS_VOYAGE_RERANK=true` | `lib/db/hybridSearch.ts` |
 | Stream Processing | 🟡 pipeline JSON only, not deployed | `atlas/stream-processing/` |
 | Mock mode (no keys needed) | ✅ | `lib/mock/restaurants.ts`, `lib/menu/provisional.ts` |
-| Private dietary profiles per user (multitenancy) | ⬜ types + index exist, nothing writes them | `lib/db/types.ts` (`DietaryProfileDoc`) |
+| No personal data stored (restrictions sent per request by Saint) | ✅ by design | `dietary_profiles` type + index are unused leftovers, can be removed |
 | Restaurant answers stored as shared facts | ⬜ type + collection name exist, no endpoint | `AllergenAnswerDoc`, `allergen_answers_anonymous` |
 | Saint integration (email restaurant, book, calendar) | ⬜ only the `nextSteps` hand-off in the response | — |
 | Per-person verdicts for a group with different restrictions | ⬜ the party's restrictions are merged into one list | — |
@@ -184,17 +184,17 @@ Database `mrmunch`.
 | `restaurants` | ✅ | `placeId` (Google id, or `osm:<id>`, or `contrib_<slug>`), `name`, `address`, `location` (GeoJSON), `phone`, `website`, `photoUrls`, `cuisine`, `rating`, `allergenConfidence`, `diet` (OSM flags), `sources` |
 | `dishes` | ✅ | `restaurantPlaceId`, `restaurantName`, `name`, `description`, **`searchText`** (auto-embedded), `priceGbp`, `allergensPresent`, `suitableFor`, `location`, `cuisine`, `source` (`website_scrape` · `openai_vision` · `user_contribution` · `restaurant_confirmed`) |
 | `menu_contributions` | ✅ | `contributionId`, `restaurantPlaceId`, `imageUrl`, `dishes`, `status`, `contributorAnonymousId` |
-| `dietary_profiles` | ⬜ | `tenantId` (unique), `allergens`, `preferences` — private per user |
+| `dietary_profiles` | ❌ not used | Leftover type + index; we decided not to store profiles (see below) |
 | `allergen_answers_anonymous` | ⬜ | `restaurantPlaceId`, `question`, `answer`, `allergensConfirmed`, `anonymous: true` — shared |
 | `users`, `menus`, `stream_events` | ⬜ | named in code, unused (`stream_events` is the Stream Processing sink) |
 
 Regular indexes (created by `/api/atlas/bootstrap`): `restaurants.placeId` (unique), `restaurants.location` (2dsphere), `dishes.{restaurantPlaceId, name}` (unique), `dishes.location` (2dsphere), `dishes.allergensPresent`, `dietary_profiles.tenantId` (unique).
 
-### Multitenancy (design, not built yet)
+### Tenancy: personal data stays with Saint, knowledge is shared in Atlas
 
-- **Private:** `dietary_profiles` (and later plans/reservations), keyed by `tenantId`, one per user / per Saint. Allergies are health data: never copied into shared collections.
-- **Shared:** `restaurants`, `dishes`, `allergen_answers_anonymous`. Knowledge about places, never about people.
-- **Each user's Saint is a single-tenant agent; MongoDB Atlas does the multitenancy.** Saints don't need to know about each other: what one learns (a menu photo, a restaurant's answer) lands in the shared collections and helps every other user.
+- **Each user's Saint is a single-tenant agent and keeps that user's restrictions.** It sends the allergens and preferences with every request (`allergens`, `preferences` in `/api/recommend`).
+- **The API is stateless for personal data.** Mr Munch never stores who someone is or what they're allergic to. Allergies are health data, so not storing them is the simplest privacy guarantee (Real World "responsibility" criterion).
+- **MongoDB Atlas holds the shared side:** `restaurants`, `dishes`, `menu_contributions`, `allergen_answers_anonymous`. Knowledge about places, never about people. Saints don't need to know about each other: what one learns (a menu photo, a restaurant's answer) lands in Atlas and helps every other user.
 
 ---
 
@@ -294,7 +294,7 @@ npm run dev               # vercel dev → http://localhost:3000 (needs `vercel 
 
 1. **Saint integration** — the core of the Saint bounty. Saint takes `nextSteps`, asks the user, emails/calls the restaurant, books, sends calendar invites. Needs: how Saint calls our API (ask at onboarding).
 2. **Restaurant answers loop** — an endpoint for Saint to post what the restaurant replied (`allergen_answers_anonymous`), used by recommend to raise `allergenConfidence` to `confirmed`.
-3. **Private dietary profiles** — `tenantId`-scoped profiles so a request can say "me + Sam" instead of listing allergens. This is what makes the multitenancy story real.
+3. **Remove leftovers** — the unused `dietary_profiles` type, collection name and index, since profiles live in Saint.
 4. **Per-person verdicts** — today the party's restrictions are merged; show which dishes work for whom.
 5. **Google ToS** — store only `placeId` from Google; keep name/location from OSM or re-fetch from Google at request time.
 6. **Source labels** — OSM directory entries are stored as `source: "restaurant_confirmed"`; that should be something like `osm_listing`, since OSM tags aren't restaurant confirmations (matters for the honesty criterion).
