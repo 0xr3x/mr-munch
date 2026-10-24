@@ -1,3 +1,5 @@
+<p align="center"><img src="./assets/logo.png" alt="Mr Munch logo: a tuxedo cat holding a fork and a phone" width="320"></p>
+
 # Mr Munch API
 
 Serverless backend for **Mr Munch**, an AI dining concierge for people with dietary restrictions (vegan, coeliac, shellfish allergy, …). Give it a location, a cuisine and the party's allergens and diets; it finds a nearby restaurant, reads its menu, checks every dish against the UK's 14 major allergens, and returns a hand-off for a Saint agent to book (always asking the user first).
