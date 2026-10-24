@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { z } from "zod";
+import { normalizeAllergenList } from "../../lib/allergens/lexicon.js";
 import { contributeMenuFromPhoto } from "../../lib/db/contributeMenu.js";
 import { json, methodNotAllowed } from "../../lib/http.js";
 import { isMongoConfigured } from "../../lib/services/mongodb.js";
@@ -38,6 +39,7 @@ const contributeSchema = z.object({
         "milk",
         "molluscs",
         "mustard",
+        "tree_nuts",
         "nuts",
         "peanuts",
         "sesame",
@@ -46,7 +48,8 @@ const contributeSchema = z.object({
       ])
     )
     .optional()
-    .default([]),
+    .default([])
+    .transform((a) => normalizeAllergenList(a)),
   preferences: z
     .array(
       z.enum([

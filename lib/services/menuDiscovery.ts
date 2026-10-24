@@ -11,6 +11,7 @@ import {
   type ParsedDish,
 } from "../menu/parseMenu.js";
 import type {
+  AllergenConfidence,
   DietaryPreference,
   MenuItem,
   PriceEstimate,
@@ -32,14 +33,44 @@ import type { GooglePlaceDetails } from "./googleMaps.js";
 export interface MenuDiscoveryResult {
   website?: string;
   pagesFetched: string[];
+  /** @deprecated prefer menuPhotoUrls / siteImageUrls */
   photoUrls: string[];
+  menuPhotoUrls: string[];
+  siteImageUrls: string[];
   dishes: ParsedDish[];
   suitableCount: number;
   totalParsed: number;
   suggestedMenu: SuggestedMenu;
   priceEstimate: PriceEstimate;
-  allergenConfidence: "menu_inferred" | "needs_restaurant_check";
+  allergenConfidence: AllergenConfidence;
   sources: string[];
+}
+
+function classifySiteImages(urls: string[]): {
+  menuPhotoUrls: string[];
+  siteImageUrls: string[];
+} {
+  const menuPhotoUrls: string[] = [];
+  const siteImageUrls: string[] = [];
+  for (const url of urls) {
+    const u = url.toLowerCase();
+    if (
+      /logo|wordmark|favicon|icon|sprite|avatar|banner-brand/.test(u)
+    ) {
+      siteImageUrls.push(url);
+      continue;
+    }
+    if (/menu|specials?|allergen|board|carta|food-menu/.test(u)) {
+      menuPhotoUrls.push(url);
+      continue;
+    }
+    // Dish marketing shots — not menu OCR evidence
+    siteImageUrls.push(url);
+  }
+  return {
+    menuPhotoUrls: [...new Set(menuPhotoUrls)].slice(0, 8),
+    siteImageUrls: [...new Set(siteImageUrls)].slice(0, 8),
+  };
 }
 
 async function gatherMarkdown(
@@ -62,7 +93,6 @@ async function gatherMarkdown(
     );
     for (const page of extras) {
       if (!page.ok) continue;
-      // Skip thin 404 pages
       if (/page not found|404 error/i.test(page.markdown) && page.markdown.length < 800) {
         continue;
       }
@@ -71,7 +101,7 @@ async function gatherMarkdown(
     }
   }
 
-  return { pages, images: [...new Set(images)].slice(0, 6) };
+  return { pages, images: [...new Set(images)].slice(0, 12) };
 }
 
 async function dishesFromOpenAiText(
@@ -87,7 +117,9 @@ async function dishesFromOpenAiText(
       priceGbp: d.priceGbp,
       raw: `${d.name}. ${d.description ?? ""} allergens:${(d.allergensSuspected ?? []).join(",")}`,
       allergensPresent: [],
+      allergenChecks: [],
       suitable: true,
+      suitableFor: [],
       preferenceConflicts: [],
     })),
     avoidAllergens,
@@ -104,16 +136,20 @@ export async function discoverMenuForPlace(
   }
 ): Promise<MenuDiscoveryResult> {
   const sources: string[] = [];
-  const photoUrls = [...(place.photoUrls ?? [])];
+  const googlePhotos = [...(place.photoUrls ?? [])];
+  let siteImages: string[] = [];
   let dishes: ParsedDish[] = [];
   const pagesFetched: string[] = [];
+  let sawPdfOrMenuPage = false;
+  let usedVision = false;
 
   if (place.websiteUri) {
     const { pages, images } = await gatherMarkdown(place.websiteUri);
-    photoUrls.push(...images);
+    siteImages.push(...images);
     for (const page of pages) {
       pagesFetched.push(page.url);
       sources.push(`website:${page.url}`);
+      if (/\.pdf($|\?)|\/menu/i.test(page.url)) sawPdfOrMenuPage = true;
 
       let pageDishes: ParsedDish[] = [];
       if (isOpenAiConfigured()) {
@@ -144,12 +180,19 @@ export async function discoverMenuForPlace(
     }
   }
 
-  // Optional: OpenAI vision on a couple of page/Google photos
-  if (isOpenAiConfigured() && photoUrls.length > 0 && dishes.length < 3) {
-    for (const img of photoUrls.slice(0, 2)) {
+  const classified = classifySiteImages(siteImages);
+  // Only run vision on images that look like menus, else Google place photos
+  const visionCandidates =
+    classified.menuPhotoUrls.length > 0
+      ? classified.menuPhotoUrls
+      : googlePhotos;
+
+  if (isOpenAiConfigured() && visionCandidates.length > 0 && dishes.length < 3) {
+    for (const img of visionCandidates.slice(0, 2)) {
       try {
         const vision = await recogniseMenuFromImage(img);
         sources.push(`openai_vision:${img.slice(0, 60)}`);
+        usedVision = true;
         const visionDishes = annotateDishes(
           vision.dishes.map((d) => ({
             name: d.name,
@@ -157,7 +200,9 @@ export async function discoverMenuForPlace(
             priceGbp: d.priceGbp,
             raw: `${d.name}. ${d.description ?? ""}`,
             allergensPresent: [],
+            allergenChecks: [],
             suitable: true,
+            suitableFor: [],
             preferenceConflicts: [],
           })),
           opts.allergens,
@@ -170,7 +215,6 @@ export async function discoverMenuForPlace(
     }
   }
 
-  // Dedupe
   const seen = new Set<string>();
   dishes = dishes.filter((d) => {
     const k = d.name.toLowerCase();
@@ -188,10 +232,28 @@ export async function discoverMenuForPlace(
   const allergenLabel =
     opts.allergens.length > 0 ? opts.allergens.join(", ") : "none";
 
+  // Ladder: needs_restaurant_check → website_text → menu_inferred → kitchen_confirmed
+  let allergenConfidence: AllergenConfidence = "needs_restaurant_check";
+  if (dishes.length > 0 && pagesFetched.length > 0) {
+    allergenConfidence =
+      usedVision || sawPdfOrMenuPage ? "menu_inferred" : "website_text";
+  } else if (usedVision && dishes.length > 0) {
+    allergenConfidence = "menu_inferred";
+  }
+
+  const menuPhotoUrls = [
+    ...classified.menuPhotoUrls,
+    ...(usedVision ? visionCandidates.slice(0, 2) : []),
+  ];
+  const siteImageUrls = classified.siteImageUrls;
+  const photoUrls = [...menuPhotoUrls, ...siteImageUrls].slice(0, 8);
+
   return {
     website: place.websiteUri,
     pagesFetched,
-    photoUrls: [...new Set(photoUrls)].slice(0, 8),
+    photoUrls,
+    menuPhotoUrls: [...new Set(menuPhotoUrls)].slice(0, 8),
+    siteImageUrls: [...new Set(siteImageUrls)].slice(0, 8),
     dishes,
     suitableCount: suitable.length,
     totalParsed: dishes.length,
@@ -199,7 +261,7 @@ export async function discoverMenuForPlace(
       items,
       notes:
         dishes.length > 0
-          ? `Parsed ${dishes.length} dishes from website/photos; ${suitable.length} look suitable for (${prefLabel}; avoid: ${allergenLabel}). Inferred only — confirm with the restaurant before booking.`
+          ? `Parsed ${dishes.length} dishes; ${suitable.length} pass hard checks for (${prefLabel}; avoid: ${allergenLabel}). Per-dish allergenChecks use clear|present|unknown — unknown means ask the kitchen. Never treat website inference as kitchen confirmation.`
           : `No structured menu found on website yet. Preferences: ${prefLabel}; avoid: ${allergenLabel}. Saint should ask the restaurant.`,
     },
     priceEstimate: {
@@ -208,8 +270,7 @@ export async function discoverMenuForPlace(
       totalGbp: price.totalGbp,
       includes: "Approx. from listed dish prices; excludes drinks & service",
     },
-    allergenConfidence:
-      dishes.length >= 3 ? "menu_inferred" : "needs_restaurant_check",
+    allergenConfidence,
     sources,
   };
 }

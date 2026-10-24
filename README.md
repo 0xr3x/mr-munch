@@ -1,15 +1,33 @@
-# Mr Munch API
+# Mr Munch (monorepo)
 
-Serverless backend for **Mr Munch** — an AI dining concierge for people with dietary restrictions. Deployed on Vercel.
+AI dining concierge for people with dietary restrictions.
+
+| Path | Package |
+|------|---------|
+| `api/` + `lib/` | Recommend / menus / Atlas API (Vercel) |
+| `apps/telegram-bot/` | **SaintMrMunchbot** — Telegram agent + OpenAI TTS reservation voice |
+
+Production: https://mrmunch.vercel.app · Bot: [@SaintMrMunchbot](https://t.me/SaintMrMunchbot)
 
 ## Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/health` | Service status + integration flags |
-| `POST` | `/api/recommend` | Recommend a restaurant + menu + price (mock today) |
+| `POST` | `/api/recommend` | Recommend a restaurant + menu + price |
 | `POST` | `/api/menus/contribute` | Update a restaurant menu from a photo (OpenAI vision → Atlas) |
 | `GET` | `/api/menus/:restaurantId` | Shared Atlas menu for a restaurant |
+| `POST` | `/api/telegram/webhook` | Telegram updates for SaintMrMunchbot |
+| `GET/POST` | `/api/telegram/setup` | Register Telegram webhook |
+
+### SaintMrMunchbot
+
+1. `/start` — greets and asks for the reservation  
+2. Free-text request → calls `/api/recommend`  
+3. Top pick is always **MrMunch Restaurant** · `+447719108497` (demo dial target)  
+4. Sends a female OpenAI TTS voice asking to hold a table for **3 at 7:30 PM**  
+
+See [`apps/telegram-bot/README.md`](./apps/telegram-bot/README.md).
 
 ## Recommend request (`POST /api/recommend`)
 
@@ -19,7 +37,7 @@ Serverless backend for **Mr Munch** — an AI dining concierge for people with d
   "longitude": -0.1278,
   "foodType": "vegan",
   "partySize": 3,
-  "allergens": ["nuts", "crustaceans"],
+  "allergens": ["tree_nuts", "peanuts", "crustaceans"],
   "preferences": ["vegan", "gluten_free"],
   "dateTime": "2026-10-24T19:30:00+01:00",
   "radiusMeters": 2000

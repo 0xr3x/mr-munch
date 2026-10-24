@@ -2,6 +2,8 @@
  * OpenAI — parse menus from website text and/or menu photos / specials boards.
  */
 
+import { normalizeAllergenList } from "../allergens/lexicon.js";
+
 export function isOpenAiConfigured(): boolean {
   return Boolean(process.env.OPENAI_API_KEY);
 }
@@ -21,7 +23,9 @@ export interface MenuVisionResult {
 const SYSTEM = `You extract restaurant menu dishes for UK allergen checking.
 Return ONLY valid JSON: {"dishes":[{"name":string,"description":string,"priceGbp":number|null,"allergensSuspected":string[]}]}
 allergensSuspected must use only these ids when relevant:
-celery, cereals_containing_gluten, crustaceans, eggs, fish, lupin, milk, molluscs, mustard, nuts, peanuts, sesame, soya, sulphur_dioxide.
+celery, cereals_containing_gluten, crustaceans, eggs, fish, lupin, milk, molluscs, mustard, tree_nuts, peanuts, sesame, soya, sulphur_dioxide.
+Use tree_nuts for almond/cashew/walnut/hazelnut/pistachio/pecan/macadamia/brazil (NOT peanuts).
+Flag cereals_containing_gluten when wheat/barley/rye/batter/soy sauce/BBQ glaze/crispy coating is likely.
 If unsure, include the allergen. Prefer fewer high-quality dishes (max 20).`;
 
 async function chatJson(
@@ -70,7 +74,7 @@ async function chatJson(
       name: d.name,
       description: d.description,
       priceGbp: d.priceGbp ?? undefined,
-      allergensSuspected: d.allergensSuspected ?? [],
+      allergensSuspected: normalizeAllergenList(d.allergensSuspected ?? []),
     })),
     rawText,
   };

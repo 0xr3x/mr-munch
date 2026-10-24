@@ -1,7 +1,6 @@
-import {
-  dishMatchesRestrictions,
-} from "../allergens/lexicon.js";
+import { dishMatchesRestrictions } from "../allergens/lexicon.js";
 import type {
+  AllergenCheck,
   DietaryPreference,
   MenuItem,
   UkAllergen,
@@ -13,7 +12,9 @@ export interface ParsedDish {
   priceGbp?: number;
   raw: string;
   allergensPresent: UkAllergen[];
+  allergenChecks: AllergenCheck[];
   suitable: boolean;
+  suitableFor: DietaryPreference[];
   preferenceConflicts: DietaryPreference[];
 }
 
@@ -47,16 +48,13 @@ export function parseDishesFromMarkdown(markdown: string): ParsedDish[] {
       name = name.replace(PRICE_RE, "").trim();
     }
 
-    // Strip trailing link markup from markdown titles
     name = name.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").trim();
-    // "Name Description 13.00" patterns without £
     const trailingPrice = name.match(/^(.*?)\s+(\d+\.\d{2})\s*$/);
     if (trailingPrice && !priceGbp) {
       name = trailingPrice[1].trim();
       priceGbp = Number(trailingPrice[2]);
     }
 
-    // Next non-empty line as description if short title
     let description = "";
     if (numbered && i + 1 < lines.length) {
       const next = lines[i + 1].trim();
@@ -71,7 +69,6 @@ export function parseDishesFromMarkdown(markdown: string): ParsedDish[] {
       }
     }
 
-    // For link-style "Name Description price"
     if (!description && name.length > 40) {
       const parts = name.split(/\s{2,}|\s+-\s+/);
       if (parts.length >= 2) {
@@ -90,12 +87,13 @@ export function parseDishesFromMarkdown(markdown: string): ParsedDish[] {
       priceGbp,
       raw,
       allergensPresent: [],
+      allergenChecks: [],
       suitable: true,
+      suitableFor: [],
       preferenceConflicts: [],
     });
   }
 
-  // Deduplicate by name
   const seen = new Set<string>();
   return dishes.filter((d) => {
     const key = d.name.toLowerCase();
@@ -115,18 +113,46 @@ export function annotateDishes(
     return {
       ...d,
       allergensPresent: check.allergensPresent,
+      allergenChecks: check.allergenChecks,
       suitable: check.ok,
+      suitableFor: check.suitableFor,
       preferenceConflicts: check.preferenceConflicts,
     };
   });
 }
 
+function notesForDish(d: ParsedDish): string {
+  const unknown = d.allergenChecks.filter((c) => c.status === "unknown");
+  const present = d.allergenChecks.filter((c) => c.status === "present");
+  if (d.suitable && unknown.length === 0) {
+    return "Restrictions clear on menu text — still confirm with kitchen before booking.";
+  }
+  const parts: string[] = [];
+  if (present.length) {
+    parts.push(
+      `present: ${present.map((c) => `${c.allergen}${c.evidence ? ` (${c.evidence})` : ""}`).join("; ")}`
+    );
+  }
+  if (unknown.length) {
+    parts.push(
+      `unknown (ask kitchen): ${unknown
+        .map((c) => `${c.allergen}${c.evidence ? ` — ${c.evidence}` : ""}`)
+        .join("; ")}`
+    );
+  }
+  if (d.preferenceConflicts.length) {
+    parts.push(`preference not met: ${d.preferenceConflicts.join(", ")}`);
+  }
+  return parts.join(" · ") || "Inferred from website — confirm with restaurant.";
+}
+
 export function toMenuItems(
   dishes: ParsedDish[],
   limit = 8,
-  preferences: DietaryPreference[] = []
+  _preferences: DietaryPreference[] = []
 ): MenuItem[] {
   const suitable = dishes.filter((d) => d.suitable);
+  // Prefer hard-suitable; if none, surface best candidates that still need kitchen checks
   const pick = (suitable.length > 0 ? suitable : dishes).slice(0, limit);
 
   return pick.map((d) => {
@@ -148,10 +174,9 @@ export function toMenuItems(
       course,
       priceGbp: d.priceGbp ?? 0,
       allergensPresent: d.allergensPresent,
-      suitableFor: d.suitable ? preferences : [],
-      notes: d.suitable
-        ? "Inferred from website text — confirm with restaurant before booking."
-        : `May conflict: ${[...d.allergensPresent, ...d.preferenceConflicts].join(", ")}`,
+      allergenChecks: d.allergenChecks,
+      suitableFor: d.suitableFor,
+      notes: notesForDish(d),
     };
   });
 }
@@ -160,15 +185,18 @@ export function estimatePriceFromDishes(
   dishes: ParsedDish[],
   partySize: number
 ): { perPersonGbp: number; totalGbp: number } {
-  const priced = dishes.filter((d) => d.suitable && d.priceGbp && d.priceGbp > 0);
-  const sample = priced.slice(0, 4);
+  const priced = dishes.filter(
+    (d) => (d.suitable || d.allergenChecks.length > 0) && d.priceGbp && d.priceGbp > 0
+  );
+  const sample = (priced.length ? priced : dishes)
+    .filter((d) => d.priceGbp && d.priceGbp > 0)
+    .slice(0, 4);
   if (sample.length === 0) {
     const perPersonGbp = 30;
     return { perPersonGbp, totalGbp: perPersonGbp * partySize };
   }
   const avg =
     sample.reduce((s, d) => s + (d.priceGbp ?? 0), 0) / sample.length;
-  // Rough full-meal: starter-ish + main
   const perPersonGbp = Number((avg * 1.8).toFixed(2));
   return {
     perPersonGbp,

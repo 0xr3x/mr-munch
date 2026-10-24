@@ -26,7 +26,7 @@
         "header": [{ "key": "Content-Type", "value": "application/json" }],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"latitude\": 51.5074,\n  \"longitude\": -0.1278,\n  \"foodType\": \"vegan\",\n  \"partySize\": 3,\n  \"allergens\": [\"nuts\", \"crustaceans\"],\n  \"preferences\": [\"vegan\", \"gluten_free\"],\n  \"dateTime\": \"2026-10-24T19:30:00+01:00\",\n  \"radiusMeters\": 2000\n}"
+          "raw": "{\n  \"latitude\": 51.5074,\n  \"longitude\": -0.1278,\n  \"foodType\": \"vegan\",\n  \"partySize\": 3,\n  \"allergens\": [\"tree_nuts\", \"peanuts\", \"crustaceans\"],\n  \"preferences\": [\"vegan\", \"gluten_free\"],\n  \"dateTime\": \"2026-10-24T19:30:00+01:00\",\n  \"radiusMeters\": 2000\n}"
         },
         "url": "{{baseUrl}}/api/recommend"
       }

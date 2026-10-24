@@ -1,13 +1,17 @@
 {
-  "name": "mrmunch-api",
+  "name": "mrmunch",
   "version": "0.1.0",
   "private": true,
-  "description": "Mr Munch — AI dining concierge backend (Vercel serverless)",
+  "description": "Mr Munch monorepo — recommend API + SaintMrMunchbot (Telegram)",
   "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
     "dev": "vercel dev",
     "deploy": "vercel --prod",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "telegram:setup": "curl -sS -X POST \"${MRMUNCH_PUBLIC_URL:-https://mrmunch.vercel.app}/api/telegram/setup\""
   },
   "engines": {
     "node": ">=20"

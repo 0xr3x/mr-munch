@@ -12,6 +12,6 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["api/**/*.ts", "lib/**/*.ts"],
+  "include": ["api/**/*.ts", "lib/**/*.ts", "apps/**/*.ts"],
   "exclude": ["node_modules"]
 }

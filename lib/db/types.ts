@@ -20,7 +20,11 @@ export interface RestaurantDoc {
   photoUrls?: string[];
   cuisine: string[];
   rating?: number;
-  allergenConfidence: "confirmed" | "menu_inferred" | "needs_restaurant_check";
+  allergenConfidence:
+    | "needs_restaurant_check"
+    | "website_text"
+    | "menu_inferred"
+    | "kitchen_confirmed";
   /** Cross-checked dietary flags (primarily OpenStreetMap diet:* tags) */
   diet?: RestaurantDietFlags;
   updatedAt: Date;

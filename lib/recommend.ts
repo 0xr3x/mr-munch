@@ -299,13 +299,14 @@ async function recommendFromGoogle(
     {
       ...toRestaurantOption(bestPlace, menu.allergenConfidence),
       website: menu.website ?? bestPlace.websiteUri,
-      photoUrls:
-        menu.photoUrls.length > 0 ? menu.photoUrls : bestPlace.photoUrls,
+      photoUrls: menu.menuPhotoUrls,
+      menuPhotoUrls: menu.menuPhotoUrls,
+      siteImageUrls: menu.siteImageUrls,
       suitableDishCount: menu.suitableCount,
       menuPagesFetched: menu.pagesFetched,
     },
-    osmMatch.place,
-    osmMatch
+    osmMatch.matched ? osmMatch.place : undefined,
+    osmMatch.matched ? osmMatch : undefined
   );
 
   const alternatives = analysed.slice(1, 4).map(({ place, menu: m, osmMatch: om }) =>
@@ -313,12 +314,14 @@ async function recommendFromGoogle(
       {
         ...toRestaurantOption(place, m.allergenConfidence),
         website: m.website ?? place.websiteUri,
-        photoUrls: m.photoUrls,
+        photoUrls: m.menuPhotoUrls,
+        menuPhotoUrls: m.menuPhotoUrls,
+        siteImageUrls: m.siteImageUrls,
         suitableDishCount: m.suitableCount,
         menuPagesFetched: m.pagesFetched,
       },
-      om.place,
-      om
+      om.matched ? om.place : undefined,
+      om.matched ? om : undefined
     )
   );
 
@@ -330,10 +333,27 @@ async function recommendFromGoogle(
       ? bestPlace.phone
       : "the number on Google Maps (not listed in Places response)";
 
-  const atlasNote = atlasBoost.get(bestPlace.id);
+  const atlasPrior = atlasBoost.get(bestPlace.id)?.dishCount;
+  const upsertedThisRun = sources
+    .filter((s) => s.startsWith(`mongo_upsert:${bestPlace.id}:`))
+    .map((s) => Number(s.split(":").pop()))
+    .find((n) => Number.isFinite(n));
   const dietNote = restaurant.diet
-    ? ` OSM diet: vegan=${restaurant.diet.vegan}, vegetarian=${restaurant.diet.vegetarian}.`
+    ? ` OSM diet: vegan=${restaurant.diet.vegan}, vegetarian=${restaurant.diet.vegetarian} (${restaurant.diet.matchDistanceMeters}m match).`
     : "";
+  const atlasNote =
+    atlasPrior != null
+      ? ` Atlas held ${atlasPrior} dishes for this place before this run` +
+        (upsertedThisRun != null
+          ? `; upserted ${upsertedThisRun} from this scrape.`
+          : ".")
+      : upsertedThisRun != null
+        ? ` Upserted ${upsertedThisRun} dishes to Atlas this run.`
+        : "";
+  const suitabilityNote =
+    menu.suitableCount === 0 && menu.totalParsed > 0
+      ? ` None of ${menu.totalParsed} dishes pass hard allergen checks (unknown ≠ clear) — Saint must confirm with the kitchen.`
+      : ` Menu: ${menu.suitableCount}/${menu.totalParsed} pass hard checks.`;
 
   return {
     mode: "live",
@@ -346,7 +366,7 @@ async function recommendFromGoogle(
       requiresUserConfirmation: true,
       bookingChannel: bestPlace.phone ? "saint_agent" : "phone",
       message: useScrapedMenu
-        ? `Found ${restaurant.name} (~${restaurant.distanceMeters}m). Menu: ${menu.suitableCount}/${menu.totalParsed} suitable.${atlasNote ? ` Atlas knew ${atlasNote.dishCount} dishes.` : ""}${dietNote} Ready for Saint to call ${phoneNote}.`
+        ? `Found ${restaurant.name} (~${restaurant.distanceMeters}m).${suitabilityNote}${atlasNote}${dietNote} Ready for Saint to call ${phoneNote}.`
         : `Found ${restaurant.name}.${dietNote} Confirm allergens before booking.`,
     },
     menuAnalysis: {
@@ -354,7 +374,11 @@ async function recommendFromGoogle(
       suitableDishes: menu.suitableCount,
       pagesFetched: menu.pagesFetched,
       photoUrls: menu.photoUrls,
+      menuPhotoUrls: menu.menuPhotoUrls,
+      siteImageUrls: menu.siteImageUrls,
       method: menu.sources,
+      atlasDishesBeforeScrape: atlasPrior,
+      dishesUpsertedThisRun: upsertedThisRun,
     },
     meta: {
       generatedAt: new Date().toISOString(),

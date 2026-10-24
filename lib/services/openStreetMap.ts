@@ -59,17 +59,50 @@ function normalizeName(name: string): string {
     .trim();
 }
 
+/** Tokens that are branch / area qualifiers — must not alone justify a far match. */
+const BRANCH_STOP = new Set([
+  "the",
+  "and",
+  "restaurant",
+  "cafe",
+  "café",
+  "bar",
+  "kitchen",
+  "london",
+  "uk",
+]);
+
+function nameTokens(name: string): string[] {
+  return normalizeName(name)
+    .split(" ")
+    .filter((t) => t.length > 1 && !BRANCH_STOP.has(t));
+}
+
 function nameSimilarity(a: string, b: string): number {
   const na = normalizeName(a);
   const nb = normalizeName(b);
   if (!na || !nb) return 0;
   if (na === nb) return 1;
   if (na.includes(nb) || nb.includes(na)) return 0.85;
-  const ta = new Set(na.split(" "));
-  const tb = new Set(nb.split(" "));
+  const ta = new Set(nameTokens(a));
+  const tb = new Set(nameTokens(b));
+  if (ta.size === 0 || tb.size === 0) return 0;
   let inter = 0;
   for (const t of ta) if (tb.has(t)) inter++;
   return inter / Math.max(ta.size, tb.size);
+}
+
+/** Extra location tokens on Google (Soho, Victoria…) not present on OSM → require tighter geo. */
+function unmatchedBranchTokens(googleName: string, osmName: string): string[] {
+  const g = nameTokens(googleName);
+  const o = new Set(nameTokens(osmName));
+  // Brand-ish first token shared → remaining google tokens are branch hints
+  if (g.length <= 1) return [];
+  const brand = g[0];
+  if (!o.has(brand) && ![...o].some((t) => brand.includes(t) || t.includes(brand))) {
+    return [];
+  }
+  return g.slice(1).filter((t) => ![...o].some((ot) => ot.includes(t) || t.includes(ot)));
 }
 
 const OVERPASS_ENDPOINTS = [
@@ -175,11 +208,15 @@ export async function searchOsmDietPlaces(input: {
   });
 }
 
-/** Match a Google place to the nearest OSM diet-tagged venue by name + distance. */
+/**
+ * Match a Google place to a nearby OSM diet-tagged venue.
+ * Distance is always hard-capped — a shared brand name must not attach a
+ * node 2km away to every chain branch (Mildreds Soho ≠ Mildreds Victoria).
+ */
 export function matchGoogleToOsm(
   google: { name: string; latitude: number; longitude: number },
   osmPlaces: OsmDietPlace[],
-  maxDistanceMeters = 120
+  maxDistanceMeters = 150
 ): OsmDietMatch {
   let best: OsmDietMatch = { matched: false };
 
@@ -191,12 +228,20 @@ export function matchGoogleToOsm(
       osm.longitude
     );
     const nameScore = nameSimilarity(google.name, osm.name);
-    if (dist > maxDistanceMeters && nameScore < 0.85) continue;
-    if (nameScore < 0.45 && dist > 60) continue;
+    const branchExtra = unmatchedBranchTokens(google.name, osm.name);
 
-    const score = nameScore * 10 - dist / 50;
+    // Hard geo gate — never inherit diet tags across the city
+    let maxDist = maxDistanceMeters;
+    if (branchExtra.length > 0) {
+      // Google has "Soho" / "Covent Garden" etc. OSM name doesn't → must be same site
+      maxDist = Math.min(maxDist, 80);
+    }
+    if (dist > maxDist) continue;
+    if (nameScore < 0.45) continue;
+
+    const score = nameScore * 10 - dist / 40 - branchExtra.length * 2;
     const prev =
-      (best.nameScore ?? 0) * 10 - (best.distanceMeters ?? 9999) / 50;
+      (best.nameScore ?? 0) * 10 - (best.distanceMeters ?? 9999) / 40;
     if (!best.matched || score > prev) {
       best = {
         matched: true,

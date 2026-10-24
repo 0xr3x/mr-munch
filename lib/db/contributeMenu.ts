@@ -145,7 +145,9 @@ function visionToParsed(
         priceGbp: d.priceGbp,
         raw: `${d.name}. ${d.description ?? ""} ${allergenHint}`.trim(),
         allergensPresent: [],
+        allergenChecks: [],
         suitable: true,
+        suitableFor: [],
         preferenceConflicts: [],
       };
     }),

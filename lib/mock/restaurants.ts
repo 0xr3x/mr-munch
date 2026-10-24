@@ -32,7 +32,7 @@ const MOCK_VENUES: MockVenue[] = [
     rating: 4.6,
     offsetMeters: { lat: 180, lng: -90 },
     tags: ["vegan", "vegetarian", "gluten_free", "coeliac", "european"],
-    allergenConfidence: "confirmed",
+    allergenConfidence: "kitchen_confirmed",
     perPersonGbp: 32,
     menu: [
       {
@@ -126,7 +126,7 @@ const MOCK_VENUES: MockVenue[] = [
     rating: 4.5,
     offsetMeters: { lat: 90, lng: 40 },
     tags: ["british", "grill", "coeliac", "gluten_free", "shellfish_free"],
-    allergenConfidence: "confirmed",
+    allergenConfidence: "kitchen_confirmed",
     perPersonGbp: 38,
     menu: [
       {
@@ -191,7 +191,7 @@ function scoreVenue(venue: MockVenue, req: RecommendRequest): number {
   );
   score += safeMains.length * 5;
 
-  if (venue.allergenConfidence === "confirmed") score += 8;
+  if (venue.allergenConfidence === "kitchen_confirmed") score += 8;
   return score;
 }
 
