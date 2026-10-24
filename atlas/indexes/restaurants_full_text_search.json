@@ -1,0 +1,16 @@
+{
+  "name": "restaurants_full_text_search",
+  "type": "search",
+  "definition": {
+    "mappings": {
+      "dynamic": false,
+      "fields": {
+        "name": { "type": "string", "analyzer": "lucene.standard" },
+        "cuisine": { "type": "string", "analyzer": "lucene.standard" },
+        "address": { "type": "string", "analyzer": "lucene.standard" },
+        "website": { "type": "string", "indexUrls": false },
+        "location": { "type": "geo" }
+      }
+    }
+  }
+}

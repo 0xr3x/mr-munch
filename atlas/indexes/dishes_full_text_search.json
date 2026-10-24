@@ -1,0 +1,19 @@
+{
+  "name": "dishes_full_text_search",
+  "type": "search",
+  "definition": {
+    "mappings": {
+      "dynamic": false,
+      "fields": {
+        "searchText": { "type": "string", "analyzer": "lucene.standard" },
+        "name": { "type": "string", "analyzer": "lucene.standard" },
+        "description": { "type": "string", "analyzer": "lucene.standard" },
+        "restaurantName": { "type": "string", "analyzer": "lucene.standard" },
+        "cuisine": { "type": "string", "analyzer": "lucene.standard" },
+        "allergensPresent": { "type": "string" },
+        "suitableFor": { "type": "string" },
+        "location": { "type": "geo" }
+      }
+    }
+  }
+}

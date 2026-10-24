@@ -1,0 +1,47 @@
+{
+  "name": "mrmunch_menu_contribution_ingest",
+  "description": "Atlas Stream Processing: when a user contributes a menu, fan out into dishes for shared knowledge. Create this in Atlas → Stream Processing → create instance → create processor.",
+  "pipeline": [
+    {
+      "$source": {
+        "connectionName": "mrmunch_cluster",
+        "db": "mrmunch",
+        "coll": "menu_contributions",
+        "config": {
+          "fullDocument": "updateLookup"
+        }
+      }
+    },
+    {
+      "$match": {
+        "operationType": { "$in": ["insert", "update"] },
+        "fullDocument.status": "parsed"
+      }
+    },
+    {
+      "$project": {
+        "restaurantPlaceId": "$fullDocument.restaurantPlaceId",
+        "restaurantName": "$fullDocument.restaurantName",
+        "dishes": "$fullDocument.dishes",
+        "contributedAt": "$fullDocument.createdAt",
+        "source": "stream_menu_contribution"
+      }
+    },
+    {
+      "$emit": {
+        "connectionName": "mrmunch_cluster",
+        "db": "mrmunch",
+        "coll": "stream_events",
+        "timeseries": {
+          "timeField": "contributedAt",
+          "metaField": "restaurantPlaceId"
+        }
+      }
+    }
+  ],
+  "notes": [
+    "Requires Atlas Stream Processing workspace (not available on every free tier).",
+    "Alternative on M0: use api/menus/contribute + direct upsert into dishes (already in app code).",
+    "Stream Processing shines when you later add Kafka / change-data-capture from scrapers."
+  ]
+}

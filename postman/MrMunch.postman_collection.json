@@ -1,0 +1,55 @@
+{
+  "info": {
+    "name": "Mr Munch API",
+    "description": "Mock recommend + menu contribution for Mr Munch",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/health"
+      }
+    },
+    {
+      "name": "Recommend restaurant",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"latitude\": 51.5074,\n  \"longitude\": -0.1278,\n  \"foodType\": \"vegan\",\n  \"partySize\": 3,\n  \"allergens\": [\"nuts\", \"crustaceans\"],\n  \"preferences\": [\"vegan\", \"gluten_free\"],\n  \"dateTime\": \"2026-10-24T19:30:00+01:00\",\n  \"radiusMeters\": 2000\n}"
+        },
+        "url": "{{baseUrl}}/api/recommend"
+      }
+    },
+    {
+      "name": "Contribute menu photo",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"restaurantId\": \"ChIJkzq7dlwddkgRBrIMQANJaDQ\",\n  \"restaurantName\": \"Sen Viet Vegan Restaurant\",\n  \"imageUrl\": \"https://upload.wikimedia.org/wikipedia/commons/thumb/6/6d/Good_Food_Display_-_NCI_Visuals_Online.jpg/640px-Good_Food_Display_-_NCI_Visuals_Online.jpg\",\n  \"notes\": \"Specials board photo\",\n  \"preferences\": [\"vegan\"],\n  \"allergens\": [\"peanuts\", \"nuts\"],\n  \"latitude\": 51.5275865,\n  \"longitude\": -0.0837702\n}"
+        },
+        "url": "{{baseUrl}}/api/menus/contribute"
+      }
+    },
+    {
+      "name": "Get restaurant menu",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/menus/ChIJkzq7dlwddkgRBrIMQANJaDQ"
+      }
+    }
+  ]
+}

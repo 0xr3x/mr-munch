@@ -1,0 +1,17 @@
+{
+  "name": "dishes_vector_search",
+  "type": "vectorSearch",
+  "definition": {
+    "fields": [
+      {
+        "type": "autoEmbed",
+        "modality": "text",
+        "path": "searchText",
+        "model": "voyage-4"
+      },
+      { "type": "filter", "path": "allergensPresent" },
+      { "type": "filter", "path": "restaurantPlaceId" },
+      { "type": "filter", "path": "suitableFor" }
+    ]
+  }
+}
