@@ -111,10 +111,11 @@ A fresh area takes **~45 s** (live websites are read). The response's `meta.sour
 | `OPENAI_ANSWER_MODEL` | `lib/services/groundedAnswer.ts` | Model for the grounded answer | Same as `OPENAI_VISION_MODEL` |
 | `OSM_USER_AGENT` | `lib/services/openStreetMap.ts` | Identifies the app to Overpass (keep it plain; fancy UAs get HTTP 406) | `MrMunch/0.1` |
 | `WEB_READER_BASE` | `lib/services/webReader.ts` | Website-to-text reader | `https://r.jina.ai/` |
-| `ATLAS_VOYAGE_RERANK` | `lib/db/hybridSearch.ts` | Voyage `$rerank` (`rerank-2.5`) after `$rankFusion`; set `false` to turn it off | Rerank **on** (falls back silently if the cluster doesn't support it) |
+| `ATLAS_VOYAGE_RERANK` | `lib/db/hybridSearch.ts` | Rerank (`rerank-2.5`) after `$rankFusion`; set `false` to turn it off | Rerank on |
 | `BOOTSTRAP_SECRET` | `api/atlas/bootstrap.ts` | Required `x-bootstrap-secret` header for bootstrap | **Bootstrap is open to anyone**; set it before the repo is public |
 | `MRMUNCH_MODE` | `lib/recommend.ts` | `mock` / `live` | Ignored when the Google key is set |
-| `VOYAGE_API_KEY` | — | Not needed: embeddings and rerank run inside Atlas | — |
+| `VOYAGE_API_KEY` | `lib/services/voyage.ts` | Rerank through the Voyage API when the cluster lacks `$rerank` (our MongoDB 8.0.34 cluster does) | **No rerank** on 8.0 clusters |
+| `VOYAGE_API_BASE` | `lib/services/voyage.ts` | Voyage API base URL | `https://api.voyageai.com/v1` |
 | `VERCEL_OIDC_TOKEN` | Vercel CLI only | Short-lived (12 h) project token written by `vercel env pull` | Not used by the app |
 
 ## MongoDB Atlas
@@ -127,7 +128,7 @@ A fresh area takes **~45 s** (live websites are read). The response's `meta.sour
 | Vector Search on `dishes.searchText` | ✅ |
 | Automated Embedding (`autoEmbed`, Voyage `voyage-4`) | ✅ |
 | Hybrid Search (`$rankFusion`, vector 0.55 + text 0.45) | ✅ running live |
-| Voyage AI rerank (`$rerank`, `rerank-2.5`) | ✅ on by default; check `meta.sources` shows `hybrid_rankFusion_voyage_rerank` |
+| Voyage AI rerank (`rerank-2.5`) | 🟡 Atlas `$rerank` is unknown on our MongoDB 8.0.34 cluster; falls back to the Voyage API when `VOYAGE_API_KEY` is set (`meta.sources` shows `hybrid_rankFusion_voyage_api_rerank`) |
 | RAG: grounded answer from Atlas-retrieved dishes | ✅ `groundedAnswer` in the response |
 | Stream Processing (`atlas/stream-processing/`) | 🟡 pipeline defined, not deployed |
 

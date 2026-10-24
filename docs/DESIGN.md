@@ -31,7 +31,7 @@ Legend: ✅ built and working · 🟡 partly built · ⬜ planned, not built
 | Allergen + diet check (keyword lexicon over the 14 allergens) | ✅ | `lib/allergens/lexicon.ts`, `lib/menu/parseMenu.ts` |
 | User menu-photo contributions → shared dishes | ✅ | `api/menus/contribute.ts`, `lib/db/contributeMenu.ts` |
 | Atlas hybrid search over dishes | ✅ (`$rankFusion` confirmed running live) | `lib/db/hybridSearch.ts` |
-| Voyage `$rerank` | ✅ on by default (`ATLAS_VOYAGE_RERANK=false` turns it off; silent fallback if unsupported) | `lib/db/hybridSearch.ts` |
+| Voyage rerank | 🟡 Atlas `$rerank` is unknown on our MongoDB 8.0.34 cluster; Voyage API fallback when `VOYAGE_API_KEY` is set | `lib/db/hybridSearch.ts`, `lib/services/voyage.ts` |
 | Grounded answer (RAG over Atlas results) | ✅ | `lib/services/groundedAnswer.ts`, step 6 in `lib/recommend.ts` |
 | Stream Processing | 🟡 pipeline JSON only, not deployed | `atlas/stream-processing/` |
 | Mock mode (no keys needed) | ✅ | `lib/mock/restaurants.ts`, `lib/menu/provisional.ts` |
@@ -208,7 +208,7 @@ Regular indexes (created by `/api/atlas/bootstrap`): `restaurants.placeId` (uniq
 | **Vector Search** | ✅ | `dishes_vector_search` on `searchText`, filters on `allergensPresent`, `restaurantPlaceId`, `suitableFor` |
 | **Automated Embedding** | ✅ | `autoEmbed` field, model `voyage-4` — Atlas embeds `searchText` itself, no embedding code |
 | **Hybrid Search** | ✅ | `$rankFusion`: vector 0.55 + full-text 0.45 (fuzzy text, allergens excluded via `mustNot`, boosted by distance) |
-| **Voyage AI** | ✅ | Embeddings via autoEmbed. `$rerank` with `rerank-2.5` after fusion, on by default (falls back silently if unavailable) |
+| **Voyage AI** | ✅ / 🟡 | Embeddings via autoEmbed ✅. Rerank `rerank-2.5` 🟡: Atlas `$rerank` isn't available on MongoDB 8.0.34, so it goes through the Voyage API when `VOYAGE_API_KEY` is set |
 | **RAG** | ✅ | Atlas retrieves the chosen restaurant's dishes (hybrid + rerank); the LLM writes the answer from them only, and invented dish names are dropped |
 | **Stream Processing** | 🟡 | `menu_contribution_pipeline.json`: change stream on `menu_contributions` (status `parsed`) → `$emit` to time-series `stream_events`. Needs a Stream Processing instance; not deployed |
 | Geospatial (not scored) | ✅ | 2dsphere + `$near` fallback, `near` scoring in `$search` |
@@ -288,7 +288,7 @@ npm run dev               # vercel dev → http://localhost:3000 (needs `vercel 
 
 - **Mock mode:** no keys → `/api/recommend` returns mock London venues; good for UI work.
 - **Live mode:** set `GOOGLE_MAPS_API_KEY` (live mode switches on automatically), plus `MONGODB_URI`, `MONGODB_DB=mrmunch`, `OPENAI_API_KEY`. Run `POST /api/atlas/bootstrap` once and wait for the indexes to be *Ready* in Atlas.
-- **Rerank:** on by default; check `meta.sources` shows `atlas:hybrid_rankFusion_voyage_rerank` (plain `atlas:hybrid_rankFusion` means the cluster rejected `$rerank`).
+- **Rerank:** set `VOYAGE_API_KEY`; `meta.sources` should show `atlas:hybrid_rankFusion_voyage_api_rerank` (or `…_voyage_rerank` on a cluster that supports `$rerank`). Plain `atlas:hybrid_rankFusion` means no rerank ran.
 - **Grounded answer:** check `groundedAnswer` in the response and `grounded_answer:atlas:…` in `meta.sources`.
 - **Shared-knowledge loop:** contribute a menu photo for a restaurant, then `GET /api/menus/:restaurantId`, then call `/api/recommend` near it and look for `Atlas knew N dishes` in `nextSteps.message`.
 

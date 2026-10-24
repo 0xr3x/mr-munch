@@ -5,6 +5,7 @@
 
 import type { Document } from "mongodb";
 import { dishesCol, isMongoConfigured } from "../services/mongodb.js";
+import { isVoyageConfigured, voyageRerank } from "../services/voyage.js";
 import type { DietaryPreference, UkAllergen } from "../types.js";
 import type { DishDoc } from "./types.js";
 
@@ -28,7 +29,7 @@ export interface HybridSearchInput {
   restaurantPlaceIds?: string[];
 }
 
-/** Voyage $rerank is on unless ATLAS_VOYAGE_RERANK=false (falls back silently if the cluster lacks it). */
+/** Rerank is on unless ATLAS_VOYAGE_RERANK=false: Atlas $rerank if the cluster has it, else the Voyage API (needs VOYAGE_API_KEY). */
 export function isRerankEnabled(): boolean {
   return process.env.ATLAS_VOYAGE_RERANK !== "false";
 }
@@ -168,7 +169,23 @@ export async function hybridSearchDishes(
           .toArray()) as HybridDishHit[];
         return { hits, method: "hybrid_rankFusion_voyage_rerank" };
       } catch {
-        /* $rerank not available on this cluster tier — continue without */
+        /* $rerank is unknown on MongoDB 8.0 — rerank through the Voyage API instead */
+      }
+      if (isVoyageConfigured()) {
+        try {
+          const pool = (await col
+            .aggregate([...fusionPipeline.slice(0, -1), { $limit: 40 }])
+            .toArray()) as HybridDishHit[];
+          const ranked = await voyageRerank(
+            q,
+            pool.map((h) => h.searchText),
+            limit
+          );
+          const hits = ranked.map((r) => ({ ...pool[r.index], rerankScore: r.score }));
+          return { hits, method: "hybrid_rankFusion_voyage_api_rerank" };
+        } catch {
+          /* Voyage API unavailable — continue without rerank */
+        }
       }
     }
 
