@@ -1,8 +1,10 @@
-# Mr Munch — Design Sketch
+# Mr Munch — Design
 
-> A dining concierge for people with dietary restrictions (vegan, coeliac, shellfish allergy, …) that finds restaurants that work for **everyone in the group**, checks the menus, asks the restaurant what the menu doesn't say, and books the table end to end.
+> An AI dining concierge for people with dietary restrictions (vegan, coeliac, shellfish allergy, …). Give it a location, a cuisine, the party's allergens and preferences, and it finds a nearby restaurant, reads its menu, checks each dish against the UK's 14 major allergens, and hands the booking to a Saint agent, which always asks the user first.
 
-Status: draft, Encode 2026 hackathon. Items marked ⚠ need confirming (MongoDB workshop / Saint check-in).
+Status: Encode 2026 hackathon, Saturday 24 Oct. This doc describes **what the code does today**, and marks what is planned but not built yet.
+
+Legend: ✅ built and working · 🟡 partly built · ⬜ planned, not built
 
 ---
 
@@ -10,355 +12,309 @@ Status: draft, Encode 2026 hackathon. Items marked ⚠ need confirming (MongoDB 
 
 | Challenge | What judges want | How Mr Munch answers it |
 |---|---|---|
-| **MongoDB Atlas** (main) | Atlas as the core backend; points per feature used | Search, Vector Search, Hybrid, Automated Embedding, Voyage rerank, Stream Processing (stretch) |
-| **Real World** (Encode) | AI that reads the physical world; honest about uncertainty; privacy | Reads menu photos / specials boards; OpenStreetMap + FSA open data; never claims "safe" for a medical allergy without confirmation; allergy data kept private |
-| **Saint** (bounty) | Saint doing a real job end to end; human control | Saint emails restaurants, books the table, sends calendar invites; asks before anything sent or booked in the user's name |
+| **MongoDB Atlas** (main) | Atlas as the core backend; points per feature used | Atlas Search, Vector Search with Automated Embedding (Voyage), Hybrid `$rankFusion`, Voyage `$rerank`, Stream Processing recipe |
+| **Real World** (Encode) | AI that reads the physical world; honest about uncertainty; privacy | Reads restaurant websites and menu / specials-board photos; OpenStreetMap open data; "unknown" never counts as "safe" |
+| **Saint** (bounty) | Saint doing a real job end to end; human control | Recommend response is a hand-off for Saint to call/book; always `requiresUserConfirmation: true` |
 
 ---
 
-## 2. The demo story (3 minutes)
+## 2. Current state at a glance
 
-Two real users (us), each with real restrictions — e.g. **Alex: coeliac**, **Sam: vegan + shellfish allergy**.
-
-1. Alex tells Saint: *"Dinner Saturday 8pm with Sam, around Shoreditch."*
-2. Saint asks Mr Munch for options → ranked restaurants, with how many dishes work for each person.
-3. Top pick's menu doesn't say whether chips share a fryer with battered food → Saint **drafts an email to the restaurant** → **asks Alex before sending**.
-4. The restaurant replies → Saint posts the answer to Mr Munch → stored as a **shared, anonymous fact** about that restaurant.
-5. Saint books (website/booking page or email), puts the restrictions in the booking note, sends Sam a calendar invite. **Asks before confirming.**
-6. At the restaurant: Sam photographs the specials board → per-person verdict per dish (safe / avoid / ask staff).
-7. Next day, Sam searches somewhere else nearby → the fryer answer Alex's Saint got is already there, *"confirmed by restaurant, 1 day ago"*. **What one user learns helps everyone.**
+| Piece | Status | Where |
+|---|---|---|
+| Recommend a restaurant + checked menu + price | ✅ live on Vercel | `api/recommend.ts`, `lib/recommend.ts` |
+| Google Places search (text → nearby fallback) + details + photos | ✅ | `lib/services/googleMaps.ts` |
+| OpenStreetMap `diet:vegan` / `diet:vegetarian` cross-check | ✅ | `lib/services/openStreetMap.ts` |
+| Vegan/vegetarian directory seeded from OSM into Atlas | ✅ | `lib/services/veganDirectory.ts`, `api/directory/sync-vegan.ts` |
+| Website menu scraping (Jina Reader → markdown → dishes) | ✅ | `lib/services/webReader.ts`, `lib/services/menuDiscovery.ts` |
+| Menu extraction with OpenAI (text + vision) | ✅ | `lib/services/openaiVision.ts` |
+| Allergen + diet check (keyword lexicon over the 14 allergens) | ✅ | `lib/allergens/lexicon.ts`, `lib/menu/parseMenu.ts` |
+| User menu-photo contributions → shared dishes | ✅ | `api/menus/contribute.ts`, `lib/db/contributeMenu.ts` |
+| Atlas hybrid search over dishes | ✅ (`$rankFusion` confirmed running live) | `lib/db/hybridSearch.ts` |
+| Voyage `$rerank` | 🟡 code done, off unless `ATLAS_VOYAGE_RERANK=true` | `lib/db/hybridSearch.ts` |
+| Stream Processing | 🟡 pipeline JSON only, not deployed | `atlas/stream-processing/` |
+| Mock mode (no keys needed) | ✅ | `lib/mock/restaurants.ts`, `lib/menu/provisional.ts` |
+| Private dietary profiles per user (multitenancy) | ⬜ types + index exist, nothing writes them | `lib/db/types.ts` (`DietaryProfileDoc`) |
+| Restaurant answers stored as shared facts | ⬜ type + collection name exist, no endpoint | `AllergenAnswerDoc`, `allergen_answers_anonymous` |
+| Saint integration (email restaurant, book, calendar) | ⬜ only the `nextSteps` hand-off in the response | — |
+| Per-person verdicts for a group with different restrictions | ⬜ the party's restrictions are merged into one list | — |
+| UI | ⬜ API only (Postman collection) | `postman/` |
 
 ---
 
-## 3. System overview
+## 3. Architecture (as built)
 
 ```mermaid
 flowchart LR
-    subgraph Users
-        A[Alex] 
-        S[Sam]
+    C[Client<br/>Postman today · Saint / UI later]
+
+    subgraph Vercel["Vercel serverless functions (TypeScript)"]
+        REC["POST /api/recommend"]
+        CON["POST /api/menus/contribute"]
+        MEN["GET /api/menus/:id"]
+        SYNC["POST /api/directory/sync-vegan"]
+        BOOT["POST /api/atlas/bootstrap"]
+        PING["GET /api/atlas/ping · /api/health"]
     end
 
-    subgraph Saint["Saint (one per user — the hands)"]
-        SE[Email]
-        SC[Calendar]
-        SB[Browser / booking sites]
+    subgraph External["External services"]
+        GP[Google Places API New]
+        OSM[OpenStreetMap Overpass]
+        JINA[Jina Reader<br/>website → markdown]
+        OAI[OpenAI gpt-4o-mini<br/>menu text + vision]
     end
 
-    subgraph App["Mr Munch backend — Python / FastAPI (the brain)"]
-        API[REST API]
-        AG[Concierge agent<br/>Claude + tools]
-        MR[Menu reader<br/>Claude vision]
+    subgraph Atlas["MongoDB Atlas — db: mrmunch"]
+        R[(restaurants)]
+        D[(dishes)]
+        MC[(menu_contributions)]
+        IDX{{Atlas Search · Vector Search autoEmbed voyage-4<br/>$rankFusion · $rerank}}
     end
 
-    subgraph Atlas["MongoDB Atlas"]
-        PRIV[(Private<br/>users, plans,<br/>reservations, memories)]
-        SHARED[(Shared<br/>restaurants, menu_items,<br/>facts, reports)]
-        SP[[Stream Processing]]
-        IDX{{Search + Vector indexes<br/>auto-embedding · Voyage}}
-    end
-
-    subgraph Open["Open data"]
-        OSM[OpenStreetMap<br/>diet:* tags]
-        FSA[FSA hygiene ratings]
-        WEB[Restaurant menus<br/>web pages]
-    end
-
-    A & S --> Saint
-    A & S --> UI[Web UI<br/>map · camera · chat]
-    UI --> API
-    Saint -->|HTTP / curl| API
-    API --> AG
-    API --> MR
-    AG --> IDX
-    IDX --- PRIV & SHARED
-    SHARED --> SP --> SHARED
-    Open -->|ingest jobs| SHARED
-    SE -.->|restaurant replies| API
+    C --> REC & CON & MEN & SYNC
+    REC --> GP & OSM & JINA & OAI
+    REC --> IDX
+    REC -->|upsert| R & D
+    SYNC --> OSM
+    SYNC -->|upsert| R & D
+    CON --> OAI
+    CON -->|upsert| R & D & MC
+    MEN --> R & D
+    BOOT -->|create indexes| IDX
+    IDX --- D
 ```
 
-**Split of responsibilities**
-
-- **Mr Munch backend = the brain.** Knows restaurants, menus, allergens and the user's profile. Searches, checks dishes, drafts messages. Stateless: all state lives in Atlas, so one service serves every user.
-- **Saint = the hands.** Acts in the real world for one user: email, calendar, browser, and the **Google Maps API** (finding places, opening hours, reviews, menu photos). Calls our API to decide what to do. Each user's Saint is a **single-tenant** agent.
-- **Atlas = the memory, and where multitenancy lives.** Private data per user, plus shared knowledge that grows with every question asked. Saints don't need to know about each other: MongoDB keeps each user's profile private and shares restaurant knowledge across all users (see §6).
+Everything runs as stateless Vercel functions; all state lives in Atlas. One deployment serves every caller.
 
 ---
 
-## 4. End-to-end booking flow
+## 4. Recommend flow (`POST /api/recommend`)
+
+Request:
+
+```json
+{
+  "latitude": 51.5246, "longitude": -0.0784,
+  "foodType": "vegan",
+  "partySize": 2,
+  "allergens": ["crustaceans", "molluscs"],
+  "preferences": ["vegan", "gluten_free"],
+  "dateTime": "2026-10-24T20:00:00+01:00",
+  "radiusMeters": 1500
+}
+```
 
 ```mermaid
 sequenceDiagram
-    actor Alex
-    participant Saint
-    participant API as Mr Munch API
-    participant Agent as Concierge agent
-    participant DB as Atlas
-    participant R as Restaurant
+    participant C as Client
+    participant API as /api/recommend
+    participant A as Atlas
+    participant G as Google Places
+    participant O as OSM Overpass
+    participant W as Jina Reader
+    participant AI as OpenAI
 
-    Alex->>Saint: "Dinner Sat 8pm with Sam, Shoreditch"
-    Saint->>API: POST /plans {members, time, area}
-    API->>Agent: plan request
-    Agent->>DB: load profiles (Alex: coeliac, Sam: vegan + crustaceans/molluscs)
-    Agent->>DB: $geoNear + hybrid search + Voyage rerank
-    Agent->>DB: menu_items + facts for candidates
-    Agent-->>API: ranked options + open questions
-    API-->>Saint: options, "fryer shared? unknown"
-    Saint->>Alex: "Top pick is X. Menu doesn't say if the fryer is shared. OK to email them?"
-    Alex->>Saint: yes
-    Saint->>R: email (drafted by agent)
-    R-->>Saint: "Separate GF fryer, yes"
-    Saint->>API: POST /facts {restaurant, claim, source: email}
-    API->>DB: insert shared fact (no user id)
-    Saint->>Alex: "Confirmed. Book for 2 at 8pm, note restrictions?"
-    Alex->>Saint: yes
-    Saint->>R: booking (website / email)
-    Saint->>API: PATCH /reservations/{id} {status: confirmed}
-    Saint->>Sam: calendar invite
+    C->>API: location, foodType, party, allergens, preferences
+    API->>A: 1. hybrid search dishes ($rankFusion text + vector, allergens excluded)
+    A-->>API: dishes grouped by restaurant → "Atlas boost"
+    API->>G: 2. text search (fallback: nearby search), up to 12 places
+    API->>O: 3. diet:vegan / diet:vegetarian places around
+    API->>A: 3b. if vegan/vegetarian: upsert OSM venues (directory sync)
+    Note over API: 4. rank places: rating + review count − distance<br/>+ Atlas dish hits + OSM diet match
+    loop top 4 candidates (in parallel)
+        API->>G: place details + up to 4 photo URLs
+        API->>W: website + up to 2 menu-looking pages
+        API->>AI: extract dishes from page text
+        API->>AI: if < 3 dishes: read up to 2 photos (vision)
+        Note over API: allergen lexicon check per dish
+        API->>A: upsert restaurant + dishes
+    end
+    Note over API: 5. re-score: suitable dishes ×15 + Atlas + OSM + place score
+    API-->>C: best restaurant, suggested menu, price, alternatives, nextSteps
 ```
 
-**Where Saint stops and asks (human control)**
+Response (shape): `restaurant` (name, location, phone, website, photos, OSM `diet` flags, `allergenConfidence`), `suggestedMenu` (up to 8 dishes with allergens and notes), `priceEstimate` (GBP per person and total), `alternatives` (up to 3), `nextSteps` (`requiresUserConfirmation: true`, `bookingChannel: "saint_agent" | "phone"`), `menuAnalysis`, `meta.sources` (a trace of every step taken).
 
-| Saint does on its own | Saint asks first |
+**Fallbacks:** no Google key → mock data. Google returns nothing or errors → mock data. No menu found → a provisional menu template picked by diet, clearly marked "not verified". Atlas search indexes not ready → plain `$near` geo query. Overpass blocked → OSM venues previously stored in Atlas.
+
+Measured on the live deployment (Shoreditch, vegan + gluten-free + no shellfish): **~47 s**, top pick Unity Diner (OSM `diet:vegan=only`, 3 m match), 4 dishes parsed, 0 marked clear → "Saint must confirm with the kitchen".
+
+---
+
+## 5. Menu photo contribution (`POST /api/menus/contribute`)
+
+A user sends a menu or specials-board photo (`imageUrl` or `imageBase64`) plus the restaurant name (and ideally its Google place id).
+
+1. Find the restaurant in Atlas by place id, then by exact name; otherwise create a stub restaurant.
+2. OpenAI vision reads the photo → dishes, prices, suspected allergens.
+3. The allergen lexicon re-checks each dish.
+4. Dishes are upserted into `dishes` with `source: "user_contribution"`; the contribution is logged in `menu_contributions`.
+5. From then on, `/api/recommend` finds those dishes through hybrid search for every user. **This is the shared-knowledge loop.**
+
+`GET /api/menus/:restaurantId` returns the stored menu for a restaurant.
+
+---
+
+## 6. Allergens, diets and confidence
+
+**Allergen ids** (UK's 14, as used in the code): `celery`, `cereals_containing_gluten`, `crustaceans`, `eggs`, `fish`, `lupin`, `milk`, `molluscs`, `mustard`, `nuts`, `peanuts`, `sesame`, `soya`, `sulphur_dioxide`.
+
+**Preferences:** `vegan`, `vegetarian`, `pescatarian`, `halal`, `kosher`, `coeliac`, `dairy_free`, `gluten_free`, `nut_free`, `shellfish_free`.
+
+**How a dish is checked** (`lib/allergens/lexicon.ts`): keyword matching over the dish name and description (e.g. "batter", "pasta" → gluten; "prawn" → crustaceans; "tofu", "miso" → soya), with a coconut ≠ tree-nut exception and vegan "fish cake" handling. Preferences conflict when an incompatible allergen or a meat keyword is found, unless the dish is marked vegan. When OpenAI extracts the menu, its suspected allergens are fed into the same check.
+
+**Restaurant-level confidence** (`allergenConfidence`):
+
+| Value | Meaning |
 |---|---|
-| Search, compare, read menus | Sending any email in the user's name |
-| Draft emails and bookings | Confirming a booking |
-| Read restaurant replies, update Mr Munch | Paying a deposit / entering card details |
-| Remind the user on the day | Sharing someone's restrictions with a restaurant |
+| `confirmed` | Confirmed by the restaurant (only in mock data today) |
+| `menu_inferred` | ≥ 3 dishes read from the menu; inferred, not confirmed |
+| `needs_restaurant_check` | Not enough menu evidence; Saint should ask |
+
+Every inferred dish carries a note like "Inferred from website text — confirm with restaurant before booking."
 
 ---
 
-## 5. Restrictions model
+## 7. Data model (as built)
 
-Based on the **UK's 14 major allergens** (what UK restaurants must be able to tell you about), plus diets.
+Database `mrmunch`.
 
-```
-allergens: celery, gluten (cereals), crustaceans, eggs, fish, lupin, milk,
-           molluscs, mustard, tree_nuts, peanuts, sesame, soya, sulphites
-diets:     vegan, vegetarian, pescatarian, halal, kosher
-"shellfish" = crustaceans + molluscs
-```
-
-Each restriction has a **severity**, which changes how careful the agent must be:
-
-| Severity | Example | Agent behaviour |
+| Collection | Status | Key fields |
 |---|---|---|
-| `preference` | vegan | Menu evidence is enough |
-| `intolerance` | lactose | Flags "may contain" |
-| `medical` | coeliac, anaphylaxis | **Never says "safe".** Best it says: "likely OK — confirmed by restaurant on <date>" or "ask staff". Cross-contamination counts |
+| `restaurants` | ✅ | `placeId` (Google id, or `osm:<id>`, or `contrib_<slug>`), `name`, `address`, `location` (GeoJSON), `phone`, `website`, `photoUrls`, `cuisine`, `rating`, `allergenConfidence`, `diet` (OSM flags), `sources` |
+| `dishes` | ✅ | `restaurantPlaceId`, `restaurantName`, `name`, `description`, **`searchText`** (auto-embedded), `priceGbp`, `allergensPresent`, `suitableFor`, `location`, `cuisine`, `source` (`website_scrape` · `openai_vision` · `user_contribution` · `restaurant_confirmed`) |
+| `menu_contributions` | ✅ | `contributionId`, `restaurantPlaceId`, `imageUrl`, `dishes`, `status`, `contributorAnonymousId` |
+| `dietary_profiles` | ⬜ | `tenantId` (unique), `allergens`, `preferences` — private per user |
+| `allergen_answers_anonymous` | ⬜ | `restaurantPlaceId`, `question`, `answer`, `allergensConfirmed`, `anonymous: true` — shared |
+| `users`, `menus`, `stream_events` | ⬜ | named in code, unused (`stream_events` is the Stream Processing sink) |
 
-**Dish verdict** (per person, per dish): `ok` · `avoid` · `ask` · `unknown`, each with `confidence` and `evidence` (the menu text or fact that justifies it).
+Regular indexes (created by `/api/atlas/bootstrap`): `restaurants.placeId` (unique), `restaurants.location` (2dsphere), `dishes.{restaurantPlaceId, name}` (unique), `dishes.location` (2dsphere), `dishes.allergensPresent`, `dietary_profiles.tenantId` (unique).
 
----
+### Multitenancy (design, not built yet)
 
-## 6. Data model
-
-```mermaid
-erDiagram
-    USERS ||--o{ PLANS : creates
-    USERS ||--o{ MEMORIES : has
-    PLANS ||--o| RESERVATIONS : becomes
-    RESTAURANTS ||--o{ MENU_ITEMS : serves
-    RESTAURANTS ||--o{ FACTS : "known about"
-    RESTAURANTS ||--o{ REPORTS : "reported on"
-    RESERVATIONS }o--|| RESTAURANTS : at
-
-    USERS {
-        ObjectId _id
-        string name
-        array restrictions "key, severity"
-    }
-    PLANS {
-        ObjectId owner_id
-        array member_ids
-        date when
-        GeoJSON area
-        string status
-    }
-    RESERVATIONS {
-        ObjectId user_id
-        ObjectId restaurant_id
-        string status "draft|asked|confirmed"
-    }
-    MEMORIES {
-        ObjectId user_id
-        string text "auto-embedded"
-    }
-    RESTAURANTS {
-        string name
-        GeoJSON location
-        array cuisines
-        object osm_diet_tags
-        int fsa_rating
-        object safety_scores "per restriction, from stream"
-    }
-    MENU_ITEMS {
-        ObjectId restaurant_id
-        string name
-        string description "auto-embedded"
-        array allergens_detected
-        string source "web|photo"
-        float confidence
-    }
-    FACTS {
-        ObjectId restaurant_id
-        string claim "auto-embedded"
-        array restrictions
-        string source "restaurant_email|staff|menu"
-        date verified_at
-    }
-    REPORTS {
-        ObjectId restaurant_id
-        string restriction
-        string outcome "fine|reaction"
-        date ts
-    }
-```
-
-**Private vs shared (multitenancy)**
-
-- **Private** (`users`, `plans`, `reservations`, `memories`): every document has `user_id`, every query filters on it, including `$vectorSearch` (`user_id` declared as a `filter` field in the index). Allergies are health data → only stored with consent, never copied into shared collections.
-- **Shared** (`restaurants`, `menu_items`, `facts`, `reports`): knowledge about places, never about people. A fact records *what* was confirmed and *how*, not *who asked*.
-- Shared collections with a `user_id` field (not a database or collection per user): simplest, and keeps the number of search indexes small.
+- **Private:** `dietary_profiles` (and later plans/reservations), keyed by `tenantId`, one per user / per Saint. Allergies are health data: never copied into shared collections.
+- **Shared:** `restaurants`, `dishes`, `allergen_answers_anonymous`. Knowledge about places, never about people.
+- **Each user's Saint is a single-tenant agent; MongoDB Atlas does the multitenancy.** Saints don't need to know about each other: what one learns (a menu photo, a restaurant's answer) lands in the shared collections and helps every other user.
 
 ---
 
-## 7. MongoDB features — what we use and why
+## 8. MongoDB features — status
 
-| Feature | Use? | Where |
+| Feature | Status | Details |
 |---|---|---|
-| **Atlas Search** | ✅ | `restaurants.name`, `menu_items` keywords: "gluten-free", "GF", "vegan", allergen names; fuzzy matching; facets by cuisine |
-| **Vector Search** | ✅ | `menu_items.description`, `facts.claim`, `memories.text` — "a quiet place that takes coeliac seriously" |
-| **Hybrid Search** | ✅ | The agent's main retrieval tool: `$rankFusion` over text + vector. Exact words matter here ("shellfish" ≠ "fish") |
-| **Automated Embedding** | ✅ ⚠ | All three vector fields embedded by Atlas (Voyage under the hood) — no embedding code. Preview: confirm index syntax |
-| **Voyage AI** | ✅ | `rerank-2.5` on hybrid results before the LLM; (maybe) multimodal embeddings for dish photos |
-| **Stream Processing** | 🟡 stretch | `reports` + new `facts` → windowed aggregation → `restaurants.safety_scores`; alert users with an upcoming booking when a place gets bad reports |
-| Geospatial (not scored) | ✅ | `2dsphere` on `restaurants.location`, `$geoNear` |
+| **Atlas Search** | ✅ | `dishes_full_text_search` (name, description, searchText, restaurantName, cuisine, allergens, geo), `restaurants_full_text_search` |
+| **Vector Search** | ✅ | `dishes_vector_search` on `searchText`, filters on `allergensPresent`, `restaurantPlaceId`, `suitableFor` |
+| **Automated Embedding** | ✅ | `autoEmbed` field, model `voyage-4` — Atlas embeds `searchText` itself, no embedding code |
+| **Hybrid Search** | ✅ | `$rankFusion`: vector 0.55 + full-text 0.45 (fuzzy text, allergens excluded via `mustNot`, boosted by distance) |
+| **Voyage AI** | ✅ / 🟡 | Embeddings via autoEmbed ✅. `$rerank` with `rerank-2.5` after fusion 🟡 (behind `ATLAS_VOYAGE_RERANK=true`; falls back silently if unavailable) |
+| **Stream Processing** | 🟡 | `menu_contribution_pipeline.json`: change stream on `menu_contributions` (status `parsed`) → `$emit` to time-series `stream_events`. Needs a Stream Processing instance; not deployed |
+| Geospatial (not scored) | ✅ | 2dsphere + `$near` fallback, `near` scoring in `$search` |
 
-### Retrieval pipeline (sketch)
-
-```js
-// menu_items: dishes that match the query, near the area, filtered by restaurant candidates
-db.menu_items.aggregate([
-  { $rankFusion: {
-      input: { pipelines: {
-        vector: [ { $vectorSearch: {
-            index: "menu_vec", path: "description",
-            query: { text: "<user request>" },          // ⚠ auto-embedding query shape
-            filter: { restaurant_id: { $in: candidateIds } },
-            numCandidates: 200, limit: 50 } } ],
-        text: [ { $search: {
-            index: "menu_text",
-            compound: {
-              should: [ { text: { query: "<user request>", path: ["name", "description"], fuzzy: {} } } ],
-              filter: [ { in: { path: "restaurant_id", value: candidateIds } } ] } } },
-          { $limit: 50 } ]
-      } },
-      combination: { weights: { vector: 0.6, text: 0.4 } }
-  } },
-  { $limit: 30 }
-])
-// → Voyage rerank top 30 → top 8 to Claude
-```
-
-Candidates come first from `$geoNear` on `restaurants` (distance + `osm_diet_tags`), then the hybrid search runs over their dishes.
-
-### Stream processor (stretch sketch)
-
-```
-source:  change stream on `reports` (+ `facts`)
-window:  $tumblingWindow 1h, group by restaurant_id + restriction
-compute: count of "reaction" vs "fine", latest confirmed facts
-sink:    $merge into `restaurant_scores` → API reads it; alerts collection
-```
-⚠ Confirm which sources Atlas Stream Processing accepts (Atlas change streams, Kafka).
-
-### Atlas tier
-M0 (free) caps the number of search indexes, and we need ~5 (menu text, menu vector, facts vector, memories vector, restaurant text). Use the **$100 credits on an M10** for the weekend. Stream Processing instance only switched on when needed.
+Index definitions live in `atlas/indexes/*.json` and are created by `POST /api/atlas/bootstrap`.
 
 ---
 
-## 8. Concierge agent
+## 9. API reference
 
-Claude (Anthropic Python SDK, tool runner) with these tools:
-
-| Tool | What it does |
-|---|---|
-| `get_profiles(user_ids)` | Restrictions + severities for the group (private) |
-| `find_restaurants(area, when, group)` | `$geoNear` + OSM diet tags + scores |
-| `search_dishes(query, restaurant_ids)` | Hybrid search + Voyage rerank |
-| `get_facts(restaurant_id)` | Confirmed facts, newest first |
-| `check_dish(dish, profiles)` | Per-person verdict with evidence |
-| `draft_restaurant_question(restaurant_id, questions)` | Email text for Saint to send |
-| `remember(user_id, text)` / `recall(user_id, query)` | Private memory (vector search filtered by `user_id`) |
-
-Output to Saint is **structured** (JSON): ranked options, per-person dish counts, open questions, drafted messages. The agent never sends anything itself — Saint does, after asking.
-
-**Menu reader:** photo (or menu web page) → Claude vision → list of dishes with ingredients it can see → allergen detection against the 14 → stored in `menu_items` with `source` and `confidence`. Blurry / partial photo → says so and asks for another, instead of guessing.
-
----
-
-## 9. Saint-facing API (draft)
-
-```
-POST  /plans                       {owner, members, when, area}     → options + open questions
-GET   /plans/{id}                                                   → current state
-POST  /restaurants/{id}/questions  {questions}                      → drafted email
-POST  /facts                       {restaurant_id, claim, source}   → shared fact
-POST  /reports                     {restaurant_id, restriction, outcome}
-PATCH /reservations/{id}           {status, details}
-POST  /menu/scan                   image + user_ids                 → per-person verdicts
-```
-⚠ How Saint calls it (terminal/curl, browser, webhook?) — ask at Saint check-in. Plan B: a CLI wrapper `mrmunch <command>` that Saint runs in its terminal.
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/api/health` | Status, mode (`mock`/`live`), which integrations are configured |
+| `GET` | `/api/atlas/ping` | Checks Vercel → Atlas connection, returns dish count |
+| `POST` | `/api/atlas/bootstrap` | Creates regular + Search/Vector indexes (optional `x-bootstrap-secret` header) |
+| `POST` | `/api/recommend` | The main flow (§4) |
+| `POST` | `/api/menus/contribute` | Menu photo → dishes in Atlas (§5) |
+| `GET` | `/api/menus/:restaurantId` | Stored menu for a restaurant |
+| `POST` | `/api/directory/sync-vegan` | `{latitude, longitude, radiusMeters?, veganOnly?}` → seed OSM vegan/vegetarian venues into Atlas |
 
 ---
 
 ## 10. Data sources
 
-| Source | What for | Notes |
+| Source | Used for | Notes |
 |---|---|---|
-| Google Maps API (via Saint) | Place search, opening hours, `reservable`, rating, reviews, menu photos (up to 10 photos per place, no category filter) | Used live. ToS: only `place_id` may be stored in Atlas |
-| OpenStreetMap (Overpass) | Restaurants, location, `diet:vegan`, `diet:gluten_free`, cuisine | Open, London-wide |
-| FSA Food Hygiene Rating API | Hygiene rating per restaurant | UK open data |
-| Restaurant websites | Menus → `menu_items` | Fetch + Claude extraction, for a demo area (~30–50 places) |
+| Google Places API (New) | Finding restaurants, details, phone, website, photos | ⚠ Google's terms allow storing **only `place_id`**; today name, address, phone, rating and photo URLs are stored in `restaurants` (and photo URLs expire). See §13 |
+| OpenStreetMap Overpass | `diet:vegan` / `diet:vegetarian` flags, vegan directory | Open data, storable with attribution. Uses FR mirror first (main endpoint returns 406 from cloud IPs) |
+| Restaurant websites via Jina Reader | Menus | Jina gets past many bot walls |
+| OpenAI `gpt-4o-mini` | Menu extraction from text and photos | Configurable via `OPENAI_VISION_MODEL` |
 | User photos | Specials boards, printed menus | Real World input |
-| Saint email replies | `facts` | The shared-knowledge loop |
+| HappyCow | Not used | Bot-protected and its ToS forbids scraping; OSM is the legal substitute |
 
 ---
 
 ## 11. Tech stack
 
-| Layer | Choice | Why |
-|---|---|---|
-| Language | Python 3.12, `uv` | Team's language |
-| API | FastAPI | Fast to write, auto docs at `/docs` (handy for Saint) |
-| DB driver | PyMongo (async API) | Official; Motor is deprecated |
-| LLM | Claude Opus 5.5 via `anthropic` SDK | Agent tool use + vision for menus |
-| Embeddings / rerank | Atlas auto-embedding + `voyageai` SDK | Counts for two MongoDB features |
-| UI | ⚠ Streamlit *or* FastAPI + plain HTML/Leaflet | Streamlit = fastest for two Python devs (chat, camera, map built in); HTML = nicer on a phone |
-| Agent in the world | Saint | Email, calendar, browser |
-| Hosting for demo | Local + tunnel (e.g. ngrok/cloudflared) so Saint can reach the API | ⚠ |
+| Layer | Choice |
+|---|---|
+| Language | TypeScript (Node ≥ 20, ESM) |
+| Hosting | Vercel serverless functions (`maxDuration` 60 s on the slow routes) |
+| Validation | Zod |
+| Database | MongoDB Atlas, official `mongodb` driver v6 |
+| Embeddings / rerank | Inside Atlas (autoEmbed `voyage-4`, `$rerank` `rerank-2.5`) |
+| LLM | OpenAI `gpt-4o-mini` (raw `fetch`, JSON mode) |
+| Places / open data | Google Places API (New), OSM Overpass, Jina Reader |
+| Agent in the world | Saint (not integrated yet) |
 
 ---
 
-## 12. Plan for the weekend
+## 12. How to test
 
-| When | Person A — data & MongoDB | Person B — agents & Saint |
-|---|---|---|
-| Fri evening | Atlas M10, ingest OSM + FSA for demo area | Repo, FastAPI skeleton, Claude menu reader on 3 real menus |
-| Sat AM | Menus → `menu_items`; text + vector (auto-embed) indexes | Saint onboarding; agent tools stubbed |
-| Sat PM | Hybrid + geo + rerank endpoint | Concierge agent end to end; Saint calls `/plans` |
-| Sun AM | Stream processor (stretch); `facts`/`reports` loop | UI (map, camera, chat); email → fact loop |
-| Sun PM | Seed demo data, record video | README, notes for each challenge, video |
+### Against the live deployment (fastest)
+
+```bash
+BASE=https://mrmunch.vercel.app
+
+curl $BASE/api/health          # mode + integrations
+curl $BASE/api/atlas/ping      # Atlas reachable + dish count
+
+curl -X POST $BASE/api/recommend -H 'Content-Type: application/json' -d '{
+  "latitude": 51.5246, "longitude": -0.0784, "foodType": "vegan", "partySize": 2,
+  "allergens": ["crustaceans","molluscs"], "preferences": ["vegan","gluten_free"],
+  "dateTime": "2026-10-24T20:00:00+01:00", "radiusMeters": 1500 }'
+```
+
+Expect ~45 s. Each live call spends Google and OpenAI credit and writes to the shared Atlas database. Or import `postman/MrMunch.postman_collection.json` and set `baseUrl` to the deployment.
+
+### Locally
+
+```bash
+npm install
+npm run typecheck
+cp .env.example .env      # leave keys empty for mock mode
+npm run dev               # vercel dev → http://localhost:3000 (needs `vercel login` once)
+```
+
+- **Mock mode:** no keys → `/api/recommend` returns mock London venues; good for UI work.
+- **Live mode:** set `GOOGLE_MAPS_API_KEY` (live mode switches on automatically), plus `MONGODB_URI`, `MONGODB_DB=mrmunch`, `OPENAI_API_KEY`. Run `POST /api/atlas/bootstrap` once and wait for the indexes to be *Ready* in Atlas.
+- **Rerank:** set `ATLAS_VOYAGE_RERANK=true`, check `meta.sources` shows `atlas:hybrid_rankFusion_voyage_rerank`.
+- **Shared-knowledge loop:** contribute a menu photo for a restaurant, then `GET /api/menus/:restaurantId`, then call `/api/recommend` near it and look for `Atlas knew N dishes` in `nextSteps.message`.
 
 ---
 
-## 13. Open questions
+## 13. Gaps and next steps
 
-- ⚠ Automated Embedding: index + query syntax; which Voyage model.
-- ⚠ Native reranking inside the pipeline vs a separate Voyage call.
-- ⚠ Stream Processing sources and cost.
-- ⚠ Saint: how it reaches our API; which accounts it has (email, booking sites).
-- Which booking path for the demo: a real restaurant's site, or a friendly restaurant over email?
-- UI: Streamlit or HTML.
+1. **Saint integration** — the core of the Saint bounty. Saint takes `nextSteps`, asks the user, emails/calls the restaurant, books, sends calendar invites. Needs: how Saint calls our API (ask at onboarding).
+2. **Restaurant answers loop** — an endpoint for Saint to post what the restaurant replied (`allergen_answers_anonymous`), used by recommend to raise `allergenConfidence` to `confirmed`.
+3. **Private dietary profiles** — `tenantId`-scoped profiles so a request can say "me + Sam" instead of listing allergens. This is what makes the multitenancy story real.
+4. **Per-person verdicts** — today the party's restrictions are merged; show which dishes work for whom.
+5. **Google ToS** — store only `placeId` from Google; keep name/location from OSM or re-fetch from Google at request time.
+6. **Source labels** — OSM directory entries are stored as `source: "restaurant_confirmed"`; that should be something like `osm_listing`, since OSM tags aren't restaurant confirmations (matters for the honesty criterion).
+7. **Latency** (~45 s) — cache menus already in Atlas instead of re-scraping every call; lower `maxResults`.
+8. **Stream Processing** — deploy the pipeline, ideally with a windowed aggregation (e.g. contributions or bad reports per restaurant per hour) feeding a score or alert.
+9. **UI** — map, camera upload, results.
+10. **Keep the repo in sync with the deployment** — the live response text is newer than the pushed code.
 
+---
+
+## 14. Demo story (target)
+
+Two real users (us) with real restrictions.
+
+1. ✅ Ask for dinner near Shoreditch → ranked restaurant with a checked menu.
+2. ✅ The menu can't clear a dish → response says the kitchen must confirm.
+3. ⬜ Saint asks the user, then emails/calls the restaurant.
+4. ⬜ The answer is stored as a shared, anonymous fact.
+5. ⬜ Saint books, notes the restrictions, sends a calendar invite. Asks before confirming.
+6. ✅ At the restaurant: photo of the specials board → dishes stored and checked.
+7. 🟡 The second user searches nearby → Atlas already knows those dishes (works for menus; facts not yet).
+
+**Where Saint stops and asks:** sending any email or message in the user's name, confirming a booking, paying a deposit, sharing someone's restrictions with a restaurant.
