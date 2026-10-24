@@ -37,8 +37,6 @@ Legend: ✅ built and working · 🟡 partly built · ⬜ planned, not built
 | No personal data stored (restrictions sent per request by Saint) | ✅ by design | `dietary_profiles` type + index are unused leftovers, can be removed |
 | Restaurant answers stored as shared facts | ⬜ type + collection name exist, no endpoint | `AllergenAnswerDoc`, `allergen_answers_anonymous` |
 | Saint integration (email restaurant, book, calendar) | ⬜ only the `nextSteps` hand-off in the response | — |
-| Per-person verdicts for a group with different restrictions | ⬜ the party's restrictions are merged into one list | — |
-| UI | ⬜ API only (Postman collection) | `postman/` |
 
 ---
 
@@ -232,7 +230,7 @@ Index definitions live in `atlas/indexes/*.json` and are created by `POST /api/a
 
 | Source | Used for | Notes |
 |---|---|---|
-| Google Places API (New) | Finding restaurants, details, phone, website, photos | ⚠ Google's terms allow storing **only `place_id`**; today name, address, phone, rating and photo URLs are stored in `restaurants` (and photo URLs expire). See §13 |
+| Google Places API (New) | Finding restaurants, details, phone, website, photos | ⚠ Google's terms allow storing **only `place_id`**; today name, address, phone, rating and photo URLs are stored in `restaurants` (and photo URLs expire) |
 | OpenStreetMap Overpass | `diet:vegan` / `diet:vegetarian` flags, vegan directory | Open data, storable with attribution. Uses FR mirror first (main endpoint returns 406 from cloud IPs) |
 | Restaurant websites via Jina Reader | Menus | Jina gets past many bot walls |
 | OpenAI `gpt-4o-mini` | Menu extraction from text and photos | Configurable via `OPENAI_VISION_MODEL` |
@@ -290,31 +288,8 @@ npm run dev               # vercel dev → http://localhost:3000 (needs `vercel 
 
 ---
 
-## 13. Gaps and next steps
+## 13. Saint hand-off
 
-1. **Saint integration** — the core of the Saint bounty. Saint takes `nextSteps`, asks the user, emails/calls the restaurant, books, sends calendar invites. Needs: how Saint calls our API (ask at onboarding).
-2. **Restaurant answers loop** — an endpoint for Saint to post what the restaurant replied (`allergen_answers_anonymous`), used by recommend to raise `allergenConfidence` to `confirmed`.
-3. **Remove leftovers** — the unused `dietary_profiles` type, collection name and index, since profiles live in Saint.
-4. **Per-person verdicts** — today the party's restrictions are merged; show which dishes work for whom.
-5. **Google ToS** — store only `placeId` from Google; keep name/location from OSM or re-fetch from Google at request time.
-6. **Source labels** — OSM directory entries are stored as `source: "restaurant_confirmed"`; that should be something like `osm_listing`, since OSM tags aren't restaurant confirmations (matters for the honesty criterion).
-7. **Latency** (~45 s) — cache menus already in Atlas instead of re-scraping every call; lower `maxResults`.
-8. **Stream Processing** — deploy the pipeline, ideally with a windowed aggregation (e.g. contributions or bad reports per restaurant per hour) feeding a score or alert.
-9. **UI** — map, camera upload, results.
-10. **Keep the repo in sync with the deployment** — the live response text is newer than the pushed code.
-
----
-
-## 14. Demo story (target)
-
-Two real users (us) with real restrictions.
-
-1. ✅ Ask for dinner near Shoreditch → ranked restaurant with a checked menu.
-2. ✅ The menu can't clear a dish → response says the kitchen must confirm.
-3. ⬜ Saint asks the user, then emails/calls the restaurant.
-4. ⬜ The answer is stored as a shared, anonymous fact.
-5. ⬜ Saint books, notes the restrictions, sends a calendar invite. Asks before confirming.
-6. ✅ At the restaurant: photo of the specials board → dishes stored and checked.
-7. 🟡 The second user searches nearby → Atlas already knows those dishes (works for menus; facts not yet).
+`/api/recommend` returns `nextSteps` with `requiresUserConfirmation: true` and `bookingChannel` (`saint_agent` when a phone number is known, otherwise `phone`).
 
 **Where Saint stops and asks:** sending any email or message in the user's name, confirming a booking, paying a deposit, sharing someone's restrictions with a restaurant.
