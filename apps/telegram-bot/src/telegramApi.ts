@@ -69,6 +69,30 @@ export async function sendMessage(
   });
 }
 
+export async function sendPhoto(
+  chatId: number,
+  photoUrlOrFile: string | Buffer,
+  caption?: string
+): Promise<void> {
+  if (typeof photoUrlOrFile === "string") {
+    await callApi("sendPhoto", {
+      chat_id: chatId,
+      photo: photoUrlOrFile,
+      ...(caption ? { caption } : {}),
+    });
+    return;
+  }
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  if (caption) form.append("caption", caption);
+  form.append(
+    "photo",
+    new Blob([new Uint8Array(photoUrlOrFile)], { type: "image/jpeg" }),
+    "logo.jpg"
+  );
+  await callApi("sendPhoto", form);
+}
+
 export async function sendChatAction(
   chatId: number,
   action: "typing" | "record_voice" | "upload_voice"

@@ -12,6 +12,7 @@ import { getSession, resetSession } from "./sessions.js";
 import {
   sendChatAction,
   sendMessage,
+  sendPhoto,
   sendVoice,
   type TelegramUpdate,
 } from "./telegramApi.js";
@@ -21,6 +22,15 @@ const HELP = `Tell me what you need in one message, for example:
 • "Italian near Encode Hub tonight at 7:30 for 3, one vegan"
 • "Thai for 2, vegetarian, Shoreditch"`;
 
+function logoUrl(kind: "banner" | "profile" = "banner"): string {
+  const base =
+    process.env.MRMUNCH_PUBLIC_URL?.replace(/\/$/, "") ??
+    "https://mrmunch.vercel.app";
+  return kind === "profile"
+    ? `${base}/logo-profile.jpg`
+    : `${base}/logo-banner.jpg`;
+}
+
 function isStart(text: string): boolean {
   return /^\/start\b/i.test(text.trim()) || /^\/help\b/i.test(text.trim());
 }
@@ -28,6 +38,15 @@ function isStart(text: string): boolean {
 async function greet(chatId: number, firstName?: string): Promise<void> {
   resetSession(chatId, firstName);
   const name = firstName ? ` ${firstName}` : "";
+  try {
+    await sendPhoto(
+      chatId,
+      logoUrl("banner"),
+      "Mr Munch — AI Dining Concierge"
+    );
+  } catch {
+    /* logo optional if CDN cold */
+  }
   await sendMessage(
     chatId,
     `Hi${name} — I'm Saint, your Mr Munch dining concierge (SaintMrMunchbot).\n\n` +
