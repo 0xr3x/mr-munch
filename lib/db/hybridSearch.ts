@@ -24,6 +24,13 @@ export interface HybridSearchInput {
   limit?: number;
   /** Use Voyage $rerank after fusion (Atlas) */
   rerank?: boolean;
+  /** Restrict results to these restaurants (e.g. grounding the final answer) */
+  restaurantPlaceIds?: string[];
+}
+
+/** Voyage $rerank is on unless ATLAS_VOYAGE_RERANK=false (falls back silently if the cluster lacks it). */
+export function isRerankEnabled(): boolean {
+  return process.env.ATLAS_VOYAGE_RERANK !== "false";
 }
 
 function buildQueryText(input: HybridSearchInput): string {
@@ -47,15 +54,13 @@ export async function hybridSearchDishes(
   const q = buildQueryText(input);
   const avoid = input.avoidAllergens ?? [];
 
-  const filterClauses: Document[] = [];
-  if (avoid.length > 0) {
-    filterClauses.push({
-      allergensPresent: { $nin: avoid },
-    });
-  }
+  const placeIds = input.restaurantPlaceIds ?? [];
+  const vectorFilter: Document = {
+    ...(avoid.length ? { allergensPresent: { $nin: avoid } } : {}),
+    ...(placeIds.length ? { restaurantPlaceId: { $in: placeIds } } : {}),
+  };
 
-  const useRerank =
-    input.rerank === true || process.env.ATLAS_VOYAGE_RERANK === "true";
+  const useRerank = input.rerank ?? isRerankEnabled();
 
   const fusionPipeline: Document[] = [
     {
@@ -70,12 +75,8 @@ export async function hybridSearchDishes(
                   query: { text: q },
                   numCandidates: 200,
                   limit: 40,
-                  ...(filterClauses.length
-                    ? {
-                        filter: {
-                          allergensPresent: { $nin: avoid },
-                        },
-                      }
+                  ...(Object.keys(vectorFilter).length
+                    ? { filter: vectorFilter }
                     : {}),
                 },
               },
@@ -121,6 +122,10 @@ export async function hybridSearchDishes(
                   },
                 },
               },
+              // restaurantPlaceId isn't in the search index, so filter after $search
+              ...(placeIds.length
+                ? [{ $match: { restaurantPlaceId: { $in: placeIds } } }]
+                : []),
               { $limit: 40 },
             ],
           },
@@ -178,6 +183,7 @@ export async function hybridSearchDishes(
     const fallback = (await col
       .find({
         ...(avoid.length ? { allergensPresent: { $nin: avoid } } : {}),
+        ...(placeIds.length ? { restaurantPlaceId: { $in: placeIds } } : {}),
         location: {
           $near: {
             $geometry: {

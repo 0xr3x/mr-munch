@@ -100,6 +100,20 @@ export interface PriceEstimate {
   includes: string;
 }
 
+/** Final recommendation written by the LLM from Atlas-retrieved dishes (RAG). */
+export interface GroundedAnswer {
+  summary: string;
+  dishesToTry: Array<{ name: string; why: string }>;
+  askTheKitchen: string[];
+  retrieval: {
+    /** "atlas_hybrid_search" when Atlas returned dishes; "fresh_menu_scrape" when they weren't indexed yet */
+    source: "atlas_hybrid_search" | "fresh_menu_scrape";
+    method: string;
+    dishesRetrieved: number;
+  };
+  model: string;
+}
+
 export interface RecommendResponse {
   mode: "mock" | "live";
   requestEcho: RecommendRequest;
@@ -107,6 +121,7 @@ export interface RecommendResponse {
   suggestedMenu: SuggestedMenu;
   priceEstimate: PriceEstimate;
   alternatives?: RestaurantOption[];
+  groundedAnswer?: GroundedAnswer;
   nextSteps: {
     requiresUserConfirmation: boolean;
     bookingChannel: "saint_agent" | "phone" | "none";

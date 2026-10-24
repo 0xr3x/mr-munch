@@ -27,6 +27,8 @@ flowchart LR
     API -->|"4b · menu text / photos → dishes<br/>OPENAI_API_KEY"| AI["OpenAI gpt-4o-mini"]
     API --> CHK
     API -->|"5 · store restaurants + dishes<br/>MONGODB_URI"| DB
+    API -->|"6 · retrieve best restaurant's dishes<br/>hybrid + rerank"| DB
+    API -->|"6 · grounded answer from Atlas results<br/>OPENAI_API_KEY"| AI
 
     subgraph DB["MongoDB Atlas · db MONGODB_DB=mrmunch"]
         R[(restaurants)]
@@ -43,7 +45,8 @@ One `/api/recommend` call:
 3. **OpenStreetMap**: places tagged `diet:vegan` / `diet:vegetarian`, matched to Google's results by name and distance (≤ ~120 m). For vegan/vegetarian parties these venues are also saved to Atlas.
 4. **For the top 4 candidates**: Google gives the website and photos, Jina Reader fetches the website as text, OpenAI extracts dishes (and reads photos when the website gives fewer than 3).
 5. **Allergen check** on every dish (keyword matching over the 14 UK allergens), then restaurants and dishes are upserted into Atlas for the next user.
-6. Returns the best restaurant, a suggested menu, a price estimate, alternatives and a `nextSteps` hand-off with `requiresUserConfirmation: true`.
+6. **RAG:** Atlas retrieves the best restaurant's dishes (hybrid search + Voyage rerank) and the LLM writes the recommendation from those dishes only: a summary, dishes to try and questions for the kitchen. Any dish name the model invents is dropped. If this run's dishes aren't embedded yet, it falls back to the freshly scraped menu and says so in `groundedAnswer.retrieval.source`. Skipped if the request has already used 45 s.
+7. Returns the best restaurant, a suggested menu, a price estimate, alternatives, the `groundedAnswer` and a `nextSteps` hand-off with `requiresUserConfirmation: true`.
 
 A fresh area takes **~45 s** (live websites are read). The response's `meta.sources` lists every step that ran.
 
@@ -90,6 +93,7 @@ A fresh area takes **~45 s** (live websites are read). The response's `meta.sour
 - `suggestedMenu`: up to 8 dishes with allergens and notes ("confirm with restaurant")
 - `priceEstimate`: per person + total, GBP
 - `alternatives`: up to 3 other restaurants
+- `groundedAnswer`: `summary`, `dishesToTry` (names only from Atlas), `askTheKitchen`, and `retrieval` (`atlas_hybrid_search` or `fresh_menu_scrape`, the search method, dishes used)
 - `nextSteps`: Saint hand-off, always `requiresUserConfirmation: true`
 - `menuAnalysis`, `meta.sources`: what was parsed and which steps ran
 
@@ -104,9 +108,10 @@ A fresh area takes **~45 s** (live websites are read). The response's `meta.sour
 | `MONGODB_DB` | `lib/services/mongodb.ts` | Database name | Defaults to `mrmunch` |
 | `OPENAI_API_KEY` | `lib/services/openaiVision.ts` | Turns menu web pages and photos into dishes | Crude regex menu parsing; no photo reading; `/api/menus/contribute` returns 503 |
 | `OPENAI_VISION_MODEL` | `lib/services/openaiVision.ts` | Model for menu extraction | `gpt-4o-mini` |
+| `OPENAI_ANSWER_MODEL` | `lib/services/groundedAnswer.ts` | Model for the grounded answer | Same as `OPENAI_VISION_MODEL` |
 | `OSM_USER_AGENT` | `lib/services/openStreetMap.ts` | Identifies the app to Overpass (keep it plain; fancy UAs get HTTP 406) | `MrMunch/0.1` |
 | `WEB_READER_BASE` | `lib/services/webReader.ts` | Website-to-text reader | `https://r.jina.ai/` |
-| `ATLAS_VOYAGE_RERANK` | `lib/db/hybridSearch.ts` | `true` adds Voyage `$rerank` (`rerank-2.5`) after `$rankFusion` | Rerank off |
+| `ATLAS_VOYAGE_RERANK` | `lib/db/hybridSearch.ts` | Voyage `$rerank` (`rerank-2.5`) after `$rankFusion`; set `false` to turn it off | Rerank **on** (falls back silently if the cluster doesn't support it) |
 | `BOOTSTRAP_SECRET` | `api/atlas/bootstrap.ts` | Required `x-bootstrap-secret` header for bootstrap | **Bootstrap is open to anyone**; set it before the repo is public |
 | `MRMUNCH_MODE` | `lib/recommend.ts` | `mock` / `live` | Ignored when the Google key is set |
 | `VOYAGE_API_KEY` | — | Not needed: embeddings and rerank run inside Atlas | — |
@@ -122,7 +127,8 @@ A fresh area takes **~45 s** (live websites are read). The response's `meta.sour
 | Vector Search on `dishes.searchText` | ✅ |
 | Automated Embedding (`autoEmbed`, Voyage `voyage-4`) | ✅ |
 | Hybrid Search (`$rankFusion`, vector 0.55 + text 0.45) | ✅ running live |
-| Voyage AI rerank (`$rerank`, `rerank-2.5`) | 🟡 behind `ATLAS_VOYAGE_RERANK=true` |
+| Voyage AI rerank (`$rerank`, `rerank-2.5`) | ✅ on by default; check `meta.sources` shows `hybrid_rankFusion_voyage_rerank` |
+| RAG: grounded answer from Atlas-retrieved dishes | ✅ `groundedAnswer` in the response |
 | Stream Processing (`atlas/stream-processing/`) | 🟡 pipeline defined, not deployed |
 
 Index definitions live in `atlas/indexes/*.json`.

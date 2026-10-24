@@ -5,7 +5,14 @@ import {
 } from "./db/persist.js";
 import { buildProvisionalMenu } from "./menu/provisional.js";
 import { buildMockRecommendation } from "./mock/restaurants.js";
-import type { RecommendRequest, RecommendResponse, RestaurantOption } from "./types.js";
+import { generateGroundedAnswer } from "./services/groundedAnswer.js";
+import { isOpenAiConfigured } from "./services/openaiVision.js";
+import type {
+  GroundedAnswer,
+  RecommendRequest,
+  RecommendResponse,
+  RestaurantOption,
+} from "./types.js";
 import {
   getPlaceDetails,
   isGoogleMapsConfigured,
@@ -27,6 +34,9 @@ import {
   loadOsmDietFromAtlas,
   syncVeganDirectoryAround,
 } from "./services/veganDirectory.js";
+
+/** Skip the grounded answer if the request is already close to Vercel's 60 s limit */
+const GROUNDED_ANSWER_BUDGET_MS = 45_000;
 
 export function getRuntimeMode(): "mock" | "live" {
   if (isGoogleMapsConfigured()) return "live";
@@ -91,6 +101,7 @@ function withDiet(
 async function recommendFromGoogle(
   req: RecommendRequest
 ): Promise<RecommendResponse> {
+  const startedAt = Date.now();
   const sources: string[] = ["google_places_api"];
   const prefs = req.preferences ?? [];
 
@@ -108,7 +119,6 @@ async function recommendFromGoogle(
       avoidAllergens: req.allergens,
       preferences: prefs,
       limit: 30,
-      rerank: process.env.ATLAS_VOYAGE_RERANK === "true",
     });
     sources.push(`atlas:${method}`);
     const grouped = groupHitsByRestaurant(hits);
@@ -335,6 +345,69 @@ async function recommendFromGoogle(
     ? ` OSM diet: vegan=${restaurant.diet.vegan}, vegetarian=${restaurant.diet.vegetarian}.`
     : "";
 
+  // 6) RAG: retrieve this restaurant's dishes from Atlas (hybrid + rerank) and
+  //    let the LLM write the recommendation from them only
+  let groundedAnswer: GroundedAnswer | undefined;
+  if (isOpenAiConfigured() && Date.now() - startedAt < GROUNDED_ANSWER_BUDGET_MS) {
+    try {
+      const retrieved = isMongoConfigured()
+        ? await hybridSearchDishes({
+            query: req.foodType,
+            latitude: req.latitude,
+            longitude: req.longitude,
+            radiusMeters: req.radiusMeters ?? 2000,
+            avoidAllergens: req.allergens,
+            preferences: prefs,
+            restaurantPlaceIds: [bestPlace.id],
+            limit: 12,
+          })
+        : { hits: [], method: "mongo_not_configured" };
+      // Dishes upserted in this run may not be embedded yet; fall back to them
+      const fromAtlas = retrieved.hits.length > 0;
+      const dishes = fromAtlas
+        ? retrieved.hits.map((h) => ({
+            name: h.name,
+            description: h.description,
+            allergensPresent: h.allergensPresent,
+            source: h.source,
+          }))
+        : menu.dishes.slice(0, 15).map((d) => ({
+            name: d.name,
+            description: d.description,
+            allergensPresent: d.allergensPresent,
+          }));
+
+      if (dishes.length > 0) {
+        groundedAnswer = await generateGroundedAnswer({
+          restaurant: {
+            name: restaurant.name,
+            distanceMeters: restaurant.distanceMeters,
+            allergenConfidence: restaurant.allergenConfidence,
+            osmVegan: restaurant.diet?.vegan,
+          },
+          party: {
+            partySize: req.partySize,
+            foodType: req.foodType,
+            allergens: req.allergens ?? [],
+            preferences: prefs,
+          },
+          dishes,
+          retrieval: {
+            source: fromAtlas ? "atlas_hybrid_search" : "fresh_menu_scrape",
+            method: retrieved.method,
+            dishesRetrieved: dishes.length,
+          },
+        });
+        sources.push(
+          `grounded_answer:${fromAtlas ? `atlas:${retrieved.method}` : "fresh_menu_scrape"}`
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "grounded_answer_error";
+      sources.push(`grounded_answer_failed:${message.slice(0, 80)}`);
+    }
+  }
+
   return {
     mode: "live",
     requestEcho: req,
@@ -342,6 +415,7 @@ async function recommendFromGoogle(
     suggestedMenu: useScrapedMenu ? menu.suggestedMenu : provisional.suggestedMenu,
     priceEstimate: useScrapedMenu ? menu.priceEstimate : provisional.priceEstimate,
     alternatives,
+    groundedAnswer,
     nextSteps: {
       requiresUserConfirmation: true,
       bookingChannel: bestPlace.phone ? "saint_agent" : "phone",
